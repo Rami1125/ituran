@@ -1,0 +1,87 @@
+{
+  "entities": {
+    "VehicleState": {
+      "title": "VehicleState",
+      "description": "The current location and status of a tracked vehicle",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Driver ID: hikmat or ali"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vehicle": {
+          "type": "string"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "latitude": {
+          "type": "number"
+        },
+        "longitude": {
+          "type": "number"
+        },
+        "address": {
+          "type": "string"
+        },
+        "lastUpdated": {
+          "type": "string"
+        },
+        "ptoState": {
+          "type": "string",
+          "enum": ["open", "closed", "unknown"]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "name", "vehicle", "driver", "latitude", "longitude", "lastUpdated"]
+    },
+    "Alert": {
+      "title": "Alert",
+      "description": "An alert log representing real-time updates and PTO changes",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "vehicle": {
+          "type": "string"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "ptoState": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["location_update", "pto_alert", "critical"]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": ["timestamp", "vehicle", "driver", "type", "message"]
+    }
+  },
+  "firestore": {
+    "/fleet/{vehicleId}": {
+      "schema": "VehicleState",
+      "description": "Active tracking location and status for each vehicle in the fleet"
+    },
+    "/alerts/{alertId}": {
+      "schema": "Alert",
+      "description": "Historical timeline of alerts and location pings from the fleet"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "נועה איתורן - Noa Ituran",
+  "description": "מערכת איתורן מתקדמת לניהול צי רכבים חכם (חכמת ועלי) כולל מפה חיה בעברית, צלצולי מיקום בזמן אמת, התרעות PTO וצ'אט סיוע נועה מבוסס AI",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

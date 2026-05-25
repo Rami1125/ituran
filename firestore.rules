@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidVehicle(data) {
+      return data.id is string && data.id.size() <= 50
+          && data.name is string && data.name.size() <= 100
+          && data.vehicle is string && data.vehicle.size() <= 100
+          && data.driver is string && data.driver.size() <= 100
+          && data.latitude is number
+          && data.longitude is number
+          && data.lastUpdated is string;
+    }
+
+    function isValidAlert(data) {
+      return data.timestamp is string
+          && data.vehicle is string && data.vehicle.size() <= 100
+          && data.driver is string && data.driver.size() <= 100
+          && data.type is string && (data.type == 'location_update' || data.type == 'pto_alert' || data.type == 'critical')
+          && data.message is string && data.message.size() <= 1000;
+    }
+
+    match /fleet/{vehicleId} {
+      allow read: if true;
+      allow write: if isSignedIn() || isValidId(vehicleId);
+    }
+
+    match /alerts/{alertId} {
+      allow read: if true;
+      allow write: if isSignedIn() || isValidId(alertId);
+    }
+  }
+}
