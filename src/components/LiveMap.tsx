@@ -145,8 +145,7 @@ const API_KEY = [
   process.env.GOOGLE_MAPS_PLATFORM_KEY,
   (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY,
   (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY,
-  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY,
-  firebaseConfig?.apiKey
+  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY
 ].find(key => !isStubOrPlaceholder(key)) || "";
 
 const hasValidKey = Boolean(API_KEY);

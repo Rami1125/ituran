@@ -10,6 +10,7 @@ interface NoaChatProps {
   onSendMessage: (customText?: string) => void;
   chatOpen: boolean;
   setChatOpen: (val: boolean) => void;
+  onTriggerDailySummary?: () => void;
 }
 
 export default function NoaChat({
@@ -19,7 +20,8 @@ export default function NoaChat({
   aiThinking,
   onSendMessage,
   chatOpen,
-  setChatOpen
+  setChatOpen,
+  onTriggerDailySummary
 }: NoaChatProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -50,13 +52,26 @@ export default function NoaChat({
             </span>
           </div>
         </div>
-        <button
-          onClick={() => setChatOpen(!chatOpen)}
-          className="bg-slate-800 hover:bg-slate-700 transition-colors p-1.5 rounded-lg text-slate-300 cursor-pointer"
-          title="מידע על הצי"
-        >
-          <MessageSquare className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {onTriggerDailySummary && (
+            <button
+              onClick={onTriggerDailySummary}
+              disabled={aiThinking}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-[10px] px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 transition-all cursor-pointer shadow-sm shadow-blue-500/20 shrink-0"
+              title="ייצור סיכום יומי ל-18:00 לצורך בדיקה"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>סיכום יומי</span>
+            </button>
+          )}
+          <button
+            onClick={() => setChatOpen(!chatOpen)}
+            className="bg-slate-800 hover:bg-slate-700 transition-colors p-1.5 rounded-lg text-slate-300 cursor-pointer shrink-0"
+            title="מידע על הצי"
+          >
+            <MessageSquare className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Conversation Thread */}

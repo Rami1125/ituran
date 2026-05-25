@@ -157,6 +157,21 @@ export default function App() {
         setFleet(data.fleet);
         setAlerts(data.alerts || []);
         setRides(data.activeRides ? Object.values(data.activeRides) : []);
+
+        if (data.chatHistory && data.chatHistory.length > 0) {
+          setChatMessages((prev) => {
+            const backendMsgs = data.chatHistory;
+            const lastPrev = prev[prev.length - 1];
+            const lastBackend = backendMsgs[backendMsgs.length - 1];
+            if (
+              prev.length !== backendMsgs.length ||
+              (lastPrev && lastBackend && lastPrev.content !== lastBackend.content)
+            ) {
+              return backendMsgs;
+            }
+            return prev;
+          });
+        }
       }
     } catch (error) {
       console.error("Failed to fetch fleet coords:", error);
@@ -239,6 +254,43 @@ export default function App() {
       fetchFleetData();
     } catch (error) {
       console.error("Chat failure:", error);
+    } finally {
+      setAiThinking(false);
+    }
+  };
+
+  const handleTriggerDailySummary = async () => {
+    if (aiThinking) return;
+    setAiThinking(true);
+
+    const userEntry: ChatMessage = {
+      role: "user",
+      content: "הפיקי נא סיכום יומי של פעילות הצי להיום לשעה 18:00.",
+      timestamp: new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })
+    };
+
+    setChatMessages((prev) => [...prev, userEntry]);
+
+    try {
+      const response = await fetch("/api/test-summary", {
+        method: "POST"
+      });
+      const data = await response.json();
+      if (data.success && data.data) {
+        setChatMessages((prev) => [...prev, data.data]);
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: "סליחה, נתקלתי בבעיה בייצור הסיכום היומי: " + (data.error || "שגיאה לא ידועה"),
+            timestamp: new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })
+          }
+        ]);
+      }
+      fetchFleetData();
+    } catch (error) {
+      console.error("Test summary generation failure:", error);
     } finally {
       setAiThinking(false);
     }
@@ -988,6 +1040,7 @@ export default function App() {
               onSendMessage={handleSendMessage}
               chatOpen={chatOpen}
               setChatOpen={setChatOpen}
+              onTriggerDailySummary={handleTriggerDailySummary}
             />
           </div>
 

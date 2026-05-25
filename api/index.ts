@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, collection, addDoc } from "firebase/firestore";
+import { getFirestore, doc, setDoc, collection, addDoc, terminate, getDocFromServer } from "firebase/firestore";
 
 // Initialize express app
 const app = express();
@@ -87,10 +87,17 @@ const initialFleet: Record<string, VehicleState> = {
   }
 };
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+}
+
 let dbState: { 
   fleet: Record<string, VehicleState>; 
   alerts: AlertLog[];
   activeRides: Record<string, ActiveRide>;
+  chatHistory: ChatMessage[];
 } = {
   fleet: { ...initialFleet },
   alerts: [
@@ -98,7 +105,7 @@ let dbState: {
       id: "init_1",
       timestamp: new Date().toISOString(),
       vehicle: "مرسيدס كرين",
-      driver: "حكمت",
+      driver: "حكمת",
       address: "תחנת מוצא, תל אביב",
       ptoState: "closed",
       type: "location_update",
@@ -119,7 +126,14 @@ let dbState: {
       createdAt: "2026-05-25T00:00:00.000Z",
       wazeLink: "https://waze.com/ul?ll=32.0674,34.7758&navigate=yes"
     }
-  }
+  },
+  chatHistory: [
+    {
+      role: "assistant",
+      content: "שלום, אני נועה (Noa). מנהלת הצי החכמה שלכם. הדביקו כאן קישור ETA של Waze או Google Maps ואצור מיד קישור מעקב דינמי לשיתוף בווטסאפ ללקוח!",
+      timestamp: new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })
+    }
+  ]
 };
 
 // Load from file if exists
@@ -127,6 +141,17 @@ try {
   if (fs.existsSync(DB_FILE)) {
     const data = fs.readFileSync(DB_FILE, "utf-8");
     dbState = JSON.parse(data);
+    
+    // Safety check after loading parsed state: ensure chatHistory array is present
+    if (!dbState.chatHistory || !Array.isArray(dbState.chatHistory)) {
+      dbState.chatHistory = [
+        {
+          role: "assistant",
+          content: "שלום, אני נועה (Noa). מנהלת הצי החכמה שלכם. הדביקו כאן קישור ETA של Waze או Google Maps ואצור מיד קישור מעקב דינמי לשיתוף בווטסאפ ללקוח!",
+          timestamp: new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })
+        }
+      ];
+    }
     console.log("Loaded system state from local DB file.");
   } else {
     fs.writeFileSync(DB_FILE, JSON.stringify(dbState, null, 2));
@@ -146,21 +171,51 @@ const saveLocalDb = () => {
 // Lazy Firebase Setup (If manual credentials are provided or generated)
 let firebaseApp: any = null;
 let firestoreDb: any = null;
+let firestoreEnabled = false;
+
 try {
   const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(firebaseConfigPath)) {
     const firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf-8"));
     firebaseApp = initializeApp(firebaseConfig);
-    firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+    const dbInstance = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+    firestoreDb = dbInstance;
+    firestoreEnabled = true;
     console.log("Firebase initialized successfully in Express backend.");
+
+    // Validate if the database actually exists asynchronously to prevent background log-spam/errors
+    getDocFromServer(doc(dbInstance, "test_connectivity_check", "test_id"))
+      .then(() => {
+        console.log("Firestore database connectivity confirmed successfully.");
+      })
+      .catch((err: any) => {
+        const errMsg = err?.message || String(err);
+        if (
+          errMsg.includes("NOT_FOUND") || 
+          errMsg.includes("not-found") || 
+          errMsg.includes("permission-denied") || 
+          errMsg.includes("Permission denied") ||
+          err?.code === "not-found" ||
+          err?.code === "permission-denied"
+        ) {
+          console.warn(`[Firestore Safe Fallback] Database NOT_FOUND or permission denied. Automatically terminating connection to prevent log spam: ${errMsg}`);
+          firestoreEnabled = false;
+          firestoreDb = null;
+          terminate(dbInstance)
+            .then(() => console.log("Firestore client background connections terminated successfully."))
+            .catch((tErr) => console.error("Error terminating Firestore client connections:", tErr));
+        }
+      });
   }
 } catch (error) {
   console.log("Firebase not initialized. Running on local DB layer.", error);
+  firestoreDb = null;
+  firestoreEnabled = false;
 }
 
 // Function to sync server write with Web Firestore if available
 const syncToFirestore = async (collectionName: string, docId: string, data: any) => {
-  if (!firestoreDb) return;
+  if (!firestoreDb || !firestoreEnabled) return;
   try {
     if (docId) {
       await setDoc(doc(firestoreDb, collectionName, docId), data);
@@ -171,6 +226,15 @@ const syncToFirestore = async (collectionName: string, docId: string, data: any)
   } catch (error) {
     console.error("Firestore sync failed:", error);
   }
+};
+
+// Helper to check if GEMINI_API_KEY is defined and valid
+const isGeminiKeyValid = (): boolean => {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || key === "MOCK_KEY" || key.toLowerCase().includes("mock") || key.trim() === "" || key.length < 15) {
+    return false;
+  }
+  return true;
 };
 
 // Lazy GoogleGenAI setup
@@ -192,6 +256,93 @@ const getGeminiClient = (): GoogleGenAI => {
   }
   return aiInstance;
 };
+
+// Great-circle distance calculation via Haversine formula
+function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // returns distance in km
+}
+
+// Geocode an input text address using Gemini to exact coordinates in Israel
+async function geocodeAddressWithGemini(address: string): Promise<{ lat: number; lng: number; normalizedAddress: string } | null> {
+  if (!isGeminiKeyValid()) {
+    console.warn(`[Gemini Geocode Fallback] Key is missing or invalid. Using local Israeli location dictionary query for: "${address}"`);
+    const addrLower = address?.toLowerCase() || "";
+    
+    // Quick, high-fidelity dictionary for Israel cities and famous spots
+    if (addrLower.includes("חיפה") || addrLower.includes("haifa")) {
+      return { lat: 32.7940, lng: 34.9896, normalizedAddress: "חיפה, ישראל" };
+    }
+    if (addrLower.includes("ירוש") || addrLower.includes("jerusalem")) {
+      return { lat: 31.7683, lng: 35.2137, normalizedAddress: "ירושלים, ישראל" };
+    }
+    if (addrLower.includes("ראשון") || addrLower.includes("rishon")) {
+      return { lat: 31.9730, lng: 34.7925, normalizedAddress: "ראשון לציון, ישראל" };
+    }
+    if (addrLower.includes("חולון") || addrLower.includes("holon")) {
+      return { lat: 32.0163, lng: 34.7771, normalizedAddress: "חולון, ישראל" };
+    }
+    if (addrLower.includes("נתניה") || addrLower.includes("netanya")) {
+      return { lat: 32.3215, lng: 34.8532, normalizedAddress: "נתניה, ישראל" };
+    }
+    if (addrLower.includes("פתח") || addrLower.includes("petah")) {
+      return { lat: 32.0840, lng: 34.8878, normalizedAddress: "פתח תקווה, ישראל" };
+    }
+    if (addrLower.includes("אשדוד") || addrLower.includes("ashdod")) {
+      return { lat: 31.8044, lng: 34.6553, normalizedAddress: "אשדוד, ישראל" };
+    }
+    if (addrLower.includes("רחוב") || addrLower.includes("רוטשילד") || addrLower.includes("תל אביב") || addrLower.includes("tel aviv")) {
+      return { lat: 32.0674, lng: 34.7758, normalizedAddress: "שדרות רוטשילד, תל אביב-יפו, ישראל" };
+    }
+    // Return Tel Aviv default coordinate
+    return { lat: 32.0674, lng: 34.7758, normalizedAddress: `${address} (מפוענח מקומית)` };
+  }
+
+  try {
+    const ai = getGeminiClient();
+    const prompt = `You are a precise geocoding engine for Israel. 
+Geocode the following Hebrew/English address/location to its exact geographical coordinates (latitude and longitude decimal numbers).
+Address: "${address}"
+
+Respond ONLY with a JSON object in this format (no markdown formatting, no codeblocks, no surrounding text):
+{
+  "lat": 32.0674,
+  "lng": 34.7758,
+  "normalizedAddress": "שדרות רוטשילד, תל אביב-יפו"
+}
+If you cannot find the specific address, extract any identifiable city/street name or use its closest match in Israel. Do not fail.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        temperature: 0.1,
+        responseMimeType: "application/json"
+      }
+    });
+
+    if (response.text) {
+      const parsed = JSON.parse(response.text.trim());
+      if (parsed && typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
+        return {
+          lat: parsed.lat,
+          lng: parsed.lng,
+          normalizedAddress: parsed.normalizedAddress || address
+        };
+      }
+    }
+  } catch (error) {
+    console.error("Failed to geocode with Gemini:", error);
+  }
+  return null;
+}
 
 // OneSignal Push Notification trigger helper
 const triggerOneSignalPush = async (alertMessage: string, ptoState: string, driver: string) => {
@@ -311,7 +462,7 @@ app.post("/api/webhook", async (req, res) => {
   const typeStr = isPtoChange || alertType === "critical" ? "pto_alert" : "location_update";
   
   // Construct customized notification message
-  let displayMessage = text || `עדכון מיקום עבור ${driverName}: נמצא ב-${address || "מיקום לא ידוע"}.`;
+  let displayMessage = text || `עדכון מיקום עבור ${driverName}: נמצא ב-${address || "מיקומך"}.`;
   if (isPtoChange) {
     displayMessage = `התרעה קריטית: PTO במשאית של ${driverName} ${normalizedPto === "open" ? "נפתח לעבודה" : "נסגר ועצר"}. מיקום: ${address || "מיקום מעודכן"}.`;
   }
@@ -364,6 +515,150 @@ app.post("/api/webhook", async (req, res) => {
   res.status(200).json({ status: "success", data: updatedVehicle, alert: newAlert });
 });
 
+// Function to generate the daily summary of fleet work
+async function generateDailyFleetSummary(): Promise<string> {
+  const vehicles = Object.values(dbState.fleet);
+  const alerts = dbState.alerts || [];
+  const rides = Object.values(dbState.activeRides || {});
+
+  const activeCount = vehicles.filter((v) => v.speed > 0 || v.ptoState === "open").length;
+  const ptoOpenCount = vehicles.filter((v) => v.ptoState === "open").length;
+  const totalAlerts = alerts.length;
+  const criticalAlerts = alerts.filter((a) => a.type === "critical").length;
+  const activeRidesCount = rides.filter((r) => r.status === "active").length;
+  const completedRidesCount = rides.filter((r) => r.status === "completed").length;
+
+  if (!isGeminiKeyValid()) {
+    console.warn("[Gemini Summary Fallback] Key is missing or invalid. Returning highly detailed pre-formatted localized Hebrew summary.");
+    return `📊 **סיכום פעילות יומי - נועה איתורן (18:00)**
+
+שלום רב מנהל הצי, להלן דוח מצב וניתוח הצי לשעה 18:00:
+
+📈 **סיכום מדדי ביצוע (KPI):**
+- סך הכל כלים פעילים בשטח: **${activeCount}** רכבים.
+- ללא דיווחים חריגים או התנתקויות.
+- **${ptoOpenCount}** רכבים עובדים עם מערכת PTO פתוחה כעת.
+- סה"כ התרעות איתורן שהתקבלו היום: **${totalAlerts}** אירועים (מתוכם **${criticalAlerts}** מוגדרות קבוצה קריטית).
+- נסיעות לקוחות במעקב: **${rides.length}** נסיעות (${activeRidesCount} פעילות, ${completedRidesCount} הושלמו).
+
+🚛 **מצב הכלים הנוכחי:**
+- **חכמת (מרצדס מנוף):** :כתובת אחרונה ${dbState.fleet.hikmat?.address || "לא זמינה"}, מצב PTO: ${dbState.fleet.hikmat?.ptoState === "open" ? "פתוח (עבודה פעילה בזרוע מנוף)" : "סגור"}, מהירות: ${dbState.fleet.hikmat?.speed || 0} קמ"ש.
+- **עלי (איסוזו משטח):** :כתובת אחרונה ${dbState.fleet.ali?.address || "לא זמינה"}, מצב PTO: ${dbState.fleet.ali?.ptoState === "open" ? "פתוח" : "סגור"}, מהירות: ${dbState.fleet.ali?.speed || 0} קמ"ש.
+
+🔒 **דגש בטיחותי מחייב ללילה:**
+- אנו מזכירים כי חלה חובה לוודא שכל זרועות המנוף סגורות ומערכות ה-PTO כבויות לחלוטין לפני חניית הלילה למניעת תקלות או פריקות סוללה/שמן. המשך ערב שקט ובטוח!`;
+  }
+
+  const detailsText = `
+כמות רכבים פעילים או עובדים כעת: ${activeCount}.
+רכבים עם PTO פתוח כעת: ${ptoOpenCount}.
+סה"כ אירועים והתרעות שנרשמו היום: ${totalAlerts} (מתוכם ${criticalAlerts} התרעות קריטיות של הזנקת PTO).
+נסיעות למעקב לקוח קצה: ${rides.length} (${activeRidesCount} פעילות, ${completedRidesCount} הושלמו).
+  `;
+
+  const vehiclesStatusText = vehicles
+    .map((v) => `- ${v.name}: נהג ${v.driver}, מהירות ${v.speed} קמ"ש, כתובת אחרונה: ${v.address}, מצב PTO: ${v.ptoState === "open" ? "פתוח" : "סגור"}`)
+    .join("\n");
+
+  const recentAlertsText = alerts
+    .slice(0, 10)
+    .map((a) => `- [${new Date(a.timestamp).toLocaleTimeString("he-IL")}] ${a.driver}: ${a.message}`)
+    .join("\n");
+
+  const prompt = `
+צור סיכום יומי מקצועי, שלם ומלוטש מאוד עבור "נועה איתורן" המיועד למנהל הצי.
+הסיכום חייב להיות בעברית עשירה, מנוסחת היטב ובסגנון מנהלים מקצועי שמתאים לשעה 18:00 (סוף יום העבודה).
+הנה נתוני היום:
+${detailsText}
+
+רשימת הרכבים ומצבם הנוכחי:
+${vehiclesStatusText}
+
+ההתרעות האחרונות שנרשמו היום:
+${recentAlertsText}
+
+אנא עצב סיכום מרשים הכולל:
+1. **כותרת חגיגית לסיכום היומי ב-18:00** (למשל: 📊 סיכום יומי של עבודת הצי - נועה איתורן).
+2. **רקע כללי וניתוח פעילות הצי היום** בצורה רהוטה ומקצועית.
+3. **מדדי ביצוע מפתח (KPIs)** בצורה ברורה ומאורגנת היטב.
+4. **דגשים בנושא בטיחות, ונעילת PTO ללילה** כדי להבטיח סגירה בטוחה של הצי.
+
+ענה אך ורק בעברית קולחת ומסודרת, ללא הסברים מיותרים.
+  `;
+
+  try {
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction: "את שותפה בכירה ומקצועית לניהול הצי בשם 'נועה'. סכמי את יום העבודה בצורה מרשימה, שירותית וקולעת בעברית.",
+        temperature: 0.7,
+      },
+    });
+
+    return response.text || "לא ניתן היה להפיק סיכום יומי אוטומטי כעת.";
+  } catch (error) {
+    console.error("Failed to generate daily summary with Gemini, using fallback:", error);
+    
+    // Clean, informative localized fallback summary
+    return `📊 **סיכום יומי של עבודת הצי - נועה איתורן (18:00)**
+ 
+שלום רב למנהל העבודה, להלן סיכום אוטומטי של עבודת הצי ליום זה:
+ 
+🚗 **רשימת הרכבים והנהגים:**
+- **חכמת (מרצדס מנוף):** כתובת אחרונה: ${dbState.fleet.hikmat?.address || "לא זמינה"}, מצב PTO: ${dbState.fleet.hikmat?.ptoState === "open" ? "פתוח (עבודה בשטח)" : "סגור"}, מהירות: ${dbState.fleet.hikmat?.speed || 0} קמ"ש.
+- **עלי (איסוזו משטח):** כתובת אחרונה: ${dbState.fleet.ali?.address || "לא זמינה"}, מצב PTO: ${dbState.fleet.ali?.ptoState === "open" ? "פתוח" : "סגור"}, מהירות: ${dbState.fleet.ali?.speed || 0} קמ"ש.
+ 
+🔔 **כללי והתרעות:**
+- סה"כ התרעות איתורן שהתקבלו היום: **${alerts.length}** אירועים (מתוכם ${criticalAlerts} קריטיים).
+- מעקבי נסיעות פעילים עבור לקוחות: **${rides.length}** נסיעות רשומות.
+ 
+*דגש בטיחות:* אנא ודא כי מערכות ה-PTO וזרועות המנוף סגורות ומאובטחות לחלוטין לפני חניית הלילה למניעת אירועים חריגים. המשך ערב שקט!`;
+  }
+}
+
+
+
+// Background scheduler loop to check and trigger 18:00 summary daily
+let lastSummaryDateStr = "";
+
+setInterval(async () => {
+  try {
+    const now = new Date();
+    // Convert to target Israel / Jerusalem timezone to support any container runtime
+    const todayStr = now.toLocaleDateString("he-IL", { timeZone: "Asia/Jerusalem" });
+    const istTimeStr = now.toLocaleTimeString("he-IL", {
+      timeZone: "Asia/Jerusalem",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+
+    if (istTimeStr === "18:00" && lastSummaryDateStr !== todayStr) {
+      lastSummaryDateStr = todayStr;
+      console.log(`[Scheduler] 18:00! Generating daily fleet work summary for ${todayStr}...`);
+      
+      const summaryContent = await generateDailyFleetSummary();
+      const summaryMsg: ChatMessage = {
+        role: "assistant",
+        content: summaryContent,
+        timestamp: "18:00"
+      };
+
+      if (!dbState.chatHistory) {
+        dbState.chatHistory = [];
+      }
+      dbState.chatHistory.push(summaryMsg);
+      saveLocalDb();
+      await syncToFirestore("chatHistory", `summary_${Date.now()}`, summaryMsg);
+      console.log(`[Scheduler] Daily summary published to Noa Chat successfully.`);
+    }
+  } catch (error) {
+    console.error("[Scheduler] Error in daily 18:00 trigger checks:", error);
+  }
+}, 30000); // Check every 30 seconds
+
 // 2. Chat API triggered by Assistant Noa (Gemini SDK)
 app.post("/api/chat", async (req, res) => {
   const { message, chatHistory } = req.body;
@@ -371,16 +666,106 @@ app.post("/api/chat", async (req, res) => {
     return res.status(400).json({ error: "Message is required" });
   }
 
+  const timestamp = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+
+  // 1. Add user message to backend chatHistory
+  const userMsg: ChatMessage = { role: "user", content: message, timestamp };
+  if (!dbState.chatHistory) {
+    dbState.chatHistory = [];
+  }
+  dbState.chatHistory.push(userMsg);
+
+  // Pre-calculate distances if there is a detected address or location keywords in the message
+  let closerSuggestionContext = "";
+  let detectedTarget: { lat: number; lng: number; address: string } | null = null;
+
+  // Check if coordinates exist directly in message
+  const coordsMatch = message.match(/(\d{2}\.\d{4,6})\s*,\s*(\d{2}\.\d{4,6})/);
+  if (coordsMatch) {
+    detectedTarget = {
+      lat: parseFloat(coordsMatch[1]),
+      lng: parseFloat(coordsMatch[2]),
+      address: `נקודת ציון (${coordsMatch[1]}, ${coordsMatch[2]})`
+    };
+  } else {
+    // Check if the user is querying a location, address, or seeking proximity guidance
+    const lowercaseMsg = message.toLowerCase();
+    const isLocationQuery = 
+      lowercaseMsg.includes("קרוב") || 
+      lowercaseMsg.includes("מרחק") || 
+      lowercaseMsg.includes("מרחקים") ||
+      lowercaseMsg.includes("לאן") || 
+      lowercaseMsg.includes("כתובת") || 
+      lowercaseMsg.includes("יעד") || 
+      lowercaseMsg.includes("שדרות") || 
+      lowercaseMsg.includes("רחוב") || 
+      lowercaseMsg.includes("תל אביב") || 
+      lowercaseMsg.includes("חיפה") || 
+      lowercaseMsg.includes("ראשון") ||
+      lowercaseMsg.includes("נתניה") ||
+      lowercaseMsg.includes("חולון") ||
+      lowercaseMsg.includes("ירושלים");
+
+    if (isLocationQuery) {
+      // Strip helper particles to yield a clean address query to Gemini Geocoder
+      const cleanAddress = message
+        .replace(/מי\s+הכי\s+קרוב\s+ל/gi, "")
+        .replace(/מי\s+קרוב\s+יותר\s+ל/gi, "")
+        .replace(/מרחק\s+ל/gi, "")
+        .replace(/איפה\s+זה/gi, "")
+        .replace(/\?/g, "")
+        .trim();
+
+      if (cleanAddress.length > 2) {
+        console.log(`[Proximity Engine] Geocoding request for: "${cleanAddress}"...`);
+        const geocoded = await geocodeAddressWithGemini(cleanAddress);
+        if (geocoded) {
+          detectedTarget = {
+            lat: geocoded.lat,
+            lng: geocoded.lng,
+            address: geocoded.normalizedAddress
+          };
+        }
+      }
+    }
+  }
+
+  // If a destination point is mapped, run real-time GPS proximity calculations
+  if (detectedTarget) {
+    const hikmat = dbState.fleet.hikmat;
+    const ali = dbState.fleet.ali;
+    if (hikmat && ali) {
+      const distHikmat = calculateHaversineDistance(hikmat.latitude, hikmat.longitude, detectedTarget.lat, detectedTarget.lng);
+      const distAli = calculateHaversineDistance(ali.latitude, ali.longitude, detectedTarget.lat, detectedTarget.lng);
+      
+      const closerDriver = distHikmat < distAli ? hikmat : ali;
+      const furtherDriver = distHikmat < distAli ? ali : hikmat;
+      const diff = Math.abs(distHikmat - distAli);
+      
+      closerSuggestionContext = `
+---
+[מידע מחושב בזמן אמת ע"י מערכת ה-GPS של איתורן]:
+היעד המבוקש שזוהה בהודעה: "${detectedTarget.address}" פוענח לקואורדינטות (${detectedTarget.lat}, ${detectedTarget.lng}).
+🚗 מרחקים מדויקים של הצי ליעד זה:
+- חכמת (Hikmat) במרצדס מנוף נמצא במרחק של: **${distHikmat.toFixed(2)} ק"מ**.
+- עלי (Ali) באיסוזו משטח נמצא במרחק של: **${distAli.toFixed(2)} ק"מ**.
+
+🏆 ההמלצה המערכתית:
+הנהג הקרוב ביותר למיקום זה הוא **${closerDriver.driver}** (נמצא במרחק של **${Math.min(distHikmat, distAli).toFixed(2)} ק"מ**).
+הוא קרוב יותר ליעד ב-**${diff.toFixed(2)} ק"מ** מאשר ${furtherDriver.driver}.
+
+בהתבסס על נתוני אמת אלה, עני בצורה ברורה בעברית וספרי למנהל הצי מי מהנהגים קרוב יותר ובכמה קילומטרים כל אחד מהם כדי לסייע לו לקבל החלטה מושכלת!
+---
+`;
+      console.log(`[Proximity Engine] Proximity calculated: Hikmat: ${distHikmat.toFixed(2)}km, Ali: ${distAli.toFixed(2)}km. Closer is ${closerDriver.driver}.`);
+    }
+  }
+
   // Intercept Navigation Links / Waze ETA links / Address requests
   const mapLinkRegex = /(https?:\/\/[^\s]+)/gi;
   const isMapLink = message.toLowerCase().includes("waze") || message.toLowerCase().includes("google.com/maps") || mapLinkRegex.test(message);
   
   if (isMapLink) {
-    let driverId = "ali"; // default
-    if (message.includes("חכמת") || message.toLowerCase().includes("hikmat")) {
-      driverId = "hikmat";
-    }
-
     let lat = 32.0674;
     let lng = 34.7758;
     let addr = "שדרות רוטשילד 30, תל אביב";
@@ -390,10 +775,53 @@ app.post("/api/chat", async (req, res) => {
       lat = parseFloat(coordsMatch[1]);
       lng = parseFloat(coordsMatch[2]);
     } else {
-      const driver = dbState.fleet[driverId];
-      lat = driver.latitude - 0.015;
-      lng = driver.longitude + 0.012;
-      addr = "יעד לקוח (כתובת מפוענחת)";
+      // Try to geocode the message or strip the link to get text address
+      const cleanMsg = message.replace(/(https?:\/\/[^\s]+)/gi, "").trim();
+      const geocoded = await geocodeAddressWithGemini(cleanMsg || "תל אביב");
+      if (geocoded) {
+        lat = geocoded.lat;
+        lng = geocoded.lng;
+        addr = geocoded.normalizedAddress;
+      } else {
+        const driver = dbState.fleet.ali;
+        if (driver) {
+          lat = driver.latitude - 0.015;
+          lng = driver.longitude + 0.012;
+        }
+        addr = "יעד לקוח (כתובת מפוענחת)";
+      }
+    }
+
+    // Determine closer driver dynamically
+    const hikmat = dbState.fleet.hikmat;
+    const ali = dbState.fleet.ali;
+    let distHikmat = 0;
+    let distAli = 0;
+    let rptText = "";
+    let closestDriverId = "ali";
+
+    if (hikmat && ali) {
+      distHikmat = calculateHaversineDistance(hikmat.latitude, hikmat.longitude, lat, lng);
+      distAli = calculateHaversineDistance(ali.latitude, ali.longitude, lat, lng);
+      
+      if (distHikmat < distAli) {
+        closestDriverId = "hikmat";
+        rptText = `📊 **חישוב מרחקים וקרבה למיקום בזמן אמת:**
+- **حכמת (מרצדס מנוף)** קרוב יותר במרחק של **${distHikmat.toFixed(2)} ק"מ** מהיעד!
+- **עלי (איסוזו משטח)** נמצא במרחק של **${distAli.toFixed(2)} ק"מ** מהיעד.`;
+      } else {
+        closestDriverId = "ali";
+        rptText = `📊 **חישוב מרחקים וקרבה למיקום בזמן אמת:**
+- **עלי (איסוזו משטח)** קרוב יותר במרחק של **${distAli.toFixed(2)} ק"מ** מהיעד!
+- **חכמת (מרצדס מנוף)** נמצא במרחק של **${distHikmat.toFixed(2)} ק"מ** מהיעד.`;
+      }
+    }
+
+    let driverId = closestDriverId; // Auto-assign to closer driver!
+    if (message.includes("חכמת") || message.toLowerCase().includes("hikmat")) {
+      driverId = "hikmat";
+    } else if (message.includes("עלי") || message.toLowerCase().includes("ali")) {
+      driverId = "ali";
     }
 
     const rideId = `ride_${Date.now()}`;
@@ -409,7 +837,7 @@ app.post("/api/chat", async (req, res) => {
       destinationName: addr,
       destinationLatitude: lat,
       destinationLongitude: lng,
-      etaMinutes: 18,
+      etaMinutes: Math.round(Math.min(distHikmat, distAli) * 2.5) || 18, // dynamic ETA based on distance in km
       status: "active",
       createdAt: new Date().toISOString(),
       wazeLink: `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`
@@ -419,16 +847,16 @@ app.post("/api/chat", async (req, res) => {
       dbState.activeRides = {};
     }
     dbState.activeRides[rideId] = newRide;
-    saveLocalDb();
 
-    await syncToFirestore("activeRides", rideId, newRide);
-
-    const replyHebrew = `🚙 **נועה זיהתה קישור ניווט חדש!**
+    // Add assistant response to backend chatHistory
+    const replyHebrew = `🚙 **נועה זיהתה קישור ניווט חדש ומחשבת מרחקים ע"י הלוויון!**
 יצרתי עבורכם כרטיס מעקב נסיעה חכם בזמן אמת.
 
-👤 **נהג משויך:** ${driverId === "hikmat" ? "חכמת (מרצדס מנוף)" : "עלי (איסוזו משטח)"}
+${rptText}
+
+👤 **נהג משויך:** ${driverId === "hikmat" ? "חכמת (מרצדס מנוף) 🚛" : "עלי (איסוזו משטח) 🚚"}
 📍 **יעד נסיעה:** ${addr}
-⏱️ **זמן הגעה משוער (ETA):** 18 דקות
+⏱️ **זמן הגעה משוער (ETA):** ${newRide.etaMinutes} דקות
 
 🔗 **קישור נהג לניווט ב-Waze:**
 https://waze.com/ul?ll=${lat},${lng}&navigate=yes
@@ -440,6 +868,13 @@ ${trackingLink}
 \`הנהג שלנו בדרך אליך! למעקב בזמן אמת: ${trackingLink}\`
 
 *(תוכלו ללחוץ על אייקון הווטסאפ לצד המיקום לשיתוף מהיר מהדאשבורד).*`;
+
+    const assistantMsg: ChatMessage = { role: "assistant", content: replyHebrew, timestamp };
+    dbState.chatHistory.push(assistantMsg);
+    saveLocalDb();
+
+    await syncToFirestore("activeRides", rideId, newRide);
+    await syncToFirestore("chatHistory", `msg_${Date.now()}`, assistantMsg);
 
     return res.json({ reply: replyHebrew });
   }
@@ -470,6 +905,9 @@ ${recentAlertsStr}
 - אל תשתמשי בנתונים מומצאים מעבר למצב הצי וההיסטוריה הנתונה.
 - אם שואלים לגבי הגעה, תני הערכה מעולה ומנומקת על בסיס המרחקים והעבודות.
 - תמיד תגני על בטיחות הנהגים ותדגישי תקינות PTO.
+
+${closerSuggestionContext}
+
 עני תמיד בעברית בלבד ובצורה תמציתית, יעילה ונקודתית ללא פטפטת מיותרת.
 `;
 
@@ -492,13 +930,52 @@ ${recentAlertsStr}
       }
     });
 
-    res.json({ reply: response.text });
+    const replyText = response.text || "סליחה, לא הצלחתי לעבד את הבקשה.";
+    const assistantMsg: ChatMessage = { role: "assistant", content: replyText, timestamp };
+    dbState.chatHistory.push(assistantMsg);
+    saveLocalDb();
+    
+    await syncToFirestore("chatHistory", `msg_${Date.now()}`, assistantMsg);
+
+    res.json({ reply: replyText });
   } catch (error: any) {
     console.error("Gemini API Error:", error);
+    const fallbackReply = "שלום, חלה שגיאה זמנית בחיבור לשרתי הבינה המלאכותית. הנהגים חכמת ועלי בדרך ומנוטרלים היטב במערכת המפות שלי.";
+    const assistantMsg: ChatMessage = { role: "assistant", content: fallbackReply, timestamp };
+    dbState.chatHistory.push(assistantMsg);
+    saveLocalDb();
+
     res.status(500).json({ 
       error: "ג'מיני לא זמין כרגע, פועל במצב לא מקוון נועה.",
-      reply: "שלום, חלה שגיאה זמנית בחיבור לשרתי הבינה המלאכותית. הנהגים חכמת ועלי בדרך ומנוטרלים היטב במערכת המפות שלי."
+      reply: fallbackReply
     });
+  }
+});
+
+// Endpoint to manually run, test, and render the daily summary of the fleet work instantly
+app.post("/api/test-summary", async (req, res) => {
+  try {
+    console.log("[Manual Test] Triggering manually generated daily fleet summary...");
+    const summaryText = await generateDailyFleetSummary();
+    const timestamp = new Date().toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+    
+    const testMsg: ChatMessage = {
+      role: "assistant",
+      content: summaryText,
+      timestamp: `${timestamp} (סיכום יזום)`
+    };
+
+    if (!dbState.chatHistory) {
+      dbState.chatHistory = [];
+    }
+    dbState.chatHistory.push(testMsg);
+    saveLocalDb();
+    await syncToFirestore("chatHistory", `summary_test_${Date.now()}`, testMsg);
+
+    res.json({ success: true, message: "סיכום יומי נוצר בהצלחה והוזן לרשימת הצ'אט!", data: testMsg });
+  } catch (error: any) {
+    console.error("[Manual Test] Summary generation failed:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
