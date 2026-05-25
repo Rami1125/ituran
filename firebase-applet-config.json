@@ -1,10 +1,10 @@
 {
-  "apiKey": "AIzaSyFakeKey-ReplaceWithYourActualFirebaseWebApiKey",
-  "authDomain": "saban-ai-drive.firebaseapp.com",
-  "projectId": "saban-ai-drive",
-  "storageBucket": "saban-ai-drive.appspot.com",
-  "messagingSenderId": "000000000000",
-  "appId": "1:000000000000:web:0000000000000000",
-  "firestoreDatabaseId": "(default)",
-  "region": "europe-west2"
+  apiKey: "AIzaSyAQzXHpiSVBqbU1zXVXtl4tDtEPnqkdeUI",
+  authDomain: "saban-ai-drive.firebaseapp.com",
+  databaseURL: "https://saban-ai-drive-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "saban-ai-drive",
+  storageBucket: "saban-ai-drive.firebasestorage.app",
+  messagingSenderId: "516446483197",
+  appId: "1:516446483197:web:2e4ef6b78ba19b42050494",
+  measurementId: "G-ND1B61P904"
 }
