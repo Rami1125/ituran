@@ -27,6 +27,7 @@ interface VehicleState {
   lastUpdated: string;
   ptoState: "open" | "closed" | "unknown";
   status: string;
+  speed: number;
   pulseActive?: boolean;
 }
 
@@ -41,6 +42,20 @@ interface AlertLog {
   message: string;
 }
 
+interface ActiveRide {
+  id: string;
+  driverId: string;
+  customerName: string;
+  customerPhone?: string;
+  destinationName: string;
+  destinationLatitude: number;
+  destinationLongitude: number;
+  etaMinutes: number;
+  status: "active" | "completed" | "cancelled";
+  createdAt: string;
+  wazeLink?: string;
+}
+
 // Initial mock data
 const initialFleet: Record<string, VehicleState> = {
   hikmat: {
@@ -53,7 +68,8 @@ const initialFleet: Record<string, VehicleState> = {
     address: "רחוב אבן גבירול, תל אביב",
     lastUpdated: new Date().toISOString(),
     ptoState: "closed",
-    status: "פעיל"
+    status: "פעיל",
+    speed: 42
   },
   ali: {
     id: "ali",
@@ -65,11 +81,16 @@ const initialFleet: Record<string, VehicleState> = {
     address: "איזור תעשייה הרצליה פיתוח",
     lastUpdated: new Date().toISOString(),
     ptoState: "closed",
-    status: "ממתין לעבודה"
+    status: "ממתין לעבודה",
+    speed: 0
   }
 };
 
-let dbState: { fleet: Record<string, VehicleState>; alerts: AlertLog[] } = {
+let dbState: { 
+  fleet: Record<string, VehicleState>; 
+  alerts: AlertLog[];
+  activeRides: Record<string, ActiveRide>;
+} = {
   fleet: { ...initialFleet },
   alerts: [
     {
@@ -82,7 +103,22 @@ let dbState: { fleet: Record<string, VehicleState>; alerts: AlertLog[] } = {
       type: "location_update",
       message: "המערכת אותחלה בהצלחה. נועה איתורן מוכנה למעקב."
     }
-  ]
+  ],
+  activeRides: {
+    "ride_ali_demo": {
+      id: "ride_ali_demo",
+      driverId: "ali",
+      customerName: "משה כהן",
+      customerPhone: "054-1234567",
+      destinationName: "שדרות רוטשילד 30, תל אביב",
+      destinationLatitude: 32.0674,
+      destinationLongitude: 34.7758,
+      etaMinutes: 22,
+      status: "active",
+      createdAt: "2026-05-25T00:00:00.000Z",
+      wazeLink: "https://waze.com/ul?ll=32.0674,34.7758&navigate=yes"
+    }
+  }
 };
 
 // Load from file if exists
@@ -191,6 +227,60 @@ const triggerOneSignalPush = async (alertMessage: string, ptoState: string, driv
 
 /* Endpoints */
 
+// 0. Rides API: Management endpoints for customer tracking rides
+app.get("/api/rides", (req, res) => {
+  res.json({ success: true, rides: Object.values(dbState.activeRides || {}) });
+});
+
+app.get("/api/rides/:id", (req, res) => {
+  const ride = dbState.activeRides ? dbState.activeRides[req.params.id] : null;
+  if (!ride) {
+    return res.status(404).json({ error: "מעקב נסיעה לא נמצא" });
+  }
+  const driver = dbState.fleet[ride.driverId];
+  res.json({ success: true, ride, driver });
+});
+
+app.post("/api/rides", async (req, res) => {
+  const { 
+    driverId, 
+    customerName, 
+    customerPhone, 
+    destinationName, 
+    destinationLatitude, 
+    destinationLongitude, 
+    etaMinutes 
+  } = req.body;
+
+  const id = `ride_${Date.now()}`;
+  const dLat = parseFloat(destinationLatitude) || 32.0853;
+  const dLng = parseFloat(destinationLongitude) || 34.7818;
+
+  const newRide: ActiveRide = {
+    id,
+    driverId: driverId || "ali",
+    customerName: customerName || "לקוח קצה",
+    customerPhone: customerPhone || "",
+    destinationName: destinationName || "מיקום כללי",
+    destinationLatitude: dLat,
+    destinationLongitude: dLng,
+    etaMinutes: parseInt(etaMinutes) || 15,
+    status: "active",
+    createdAt: new Date().toISOString(),
+    wazeLink: `https://waze.com/ul?ll=${dLat},${dLng}&navigate=yes`
+  };
+
+  if (!dbState.activeRides) {
+    dbState.activeRides = {};
+  }
+  dbState.activeRides[id] = newRide;
+  saveLocalDb();
+
+  await syncToFirestore("activeRides", id, newRide);
+
+  res.json({ success: true, ride: newRide });
+});
+
 // 1. Webhook Endpoint: Handles Firestore logs and triggers OneSignal API
 app.post("/api/webhook", async (req, res) => {
   console.log("Received Webhook Data:", req.body);
@@ -278,6 +368,79 @@ app.post("/api/chat", async (req, res) => {
   const { message, chatHistory } = req.body;
   if (!message) {
     return res.status(400).json({ error: "Message is required" });
+  }
+
+  // Intercept Navigation Links / Waze ETA links / Address requests
+  const mapLinkRegex = /(https?:\/\/[^\s]+)/gi;
+  const isMapLink = message.toLowerCase().includes("waze") || message.toLowerCase().includes("google.com/maps") || mapLinkRegex.test(message);
+  
+  if (isMapLink) {
+    let driverId = "ali"; // default
+    if (message.includes("חכמת") || message.toLowerCase().includes("hikmat")) {
+      driverId = "hikmat";
+    }
+
+    let lat = 32.0674;
+    let lng = 34.7758;
+    let addr = "שדרות רוטשילד 30, תל אביב";
+
+    const coordsMatch = message.match(/(\d{2}\.\d{4,6})\s*,\s*(\d{2}\.\d{4,6})/);
+    if (coordsMatch) {
+      lat = parseFloat(coordsMatch[1]);
+      lng = parseFloat(coordsMatch[2]);
+    } else {
+      const driver = dbState.fleet[driverId];
+      lat = driver.latitude - 0.015;
+      lng = driver.longitude + 0.012;
+      addr = "יעד לקוח (כתובת מפוענחת)";
+    }
+
+    const rideId = `ride_${Date.now()}`;
+    const dynamicOrigin = req.headers.origin || req.headers.referer || "http://localhost:3000";
+    const cleanOrigin = dynamicOrigin.endsWith('/') ? dynamicOrigin.slice(0, -1) : dynamicOrigin;
+    const trackingLink = `${cleanOrigin}/track/${rideId}`;
+
+    const newRide: ActiveRide = {
+      id: rideId,
+      driverId,
+      customerName: "ישראל ישראלי",
+      customerPhone: "054-9998888",
+      destinationName: addr,
+      destinationLatitude: lat,
+      destinationLongitude: lng,
+      etaMinutes: 18,
+      status: "active",
+      createdAt: new Date().toISOString(),
+      wazeLink: `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`
+    };
+
+    if (!dbState.activeRides) {
+      dbState.activeRides = {};
+    }
+    dbState.activeRides[rideId] = newRide;
+    saveLocalDb();
+
+    await syncToFirestore("activeRides", rideId, newRide);
+
+    const replyHebrew = `🚙 **נועה זיהתה קישור ניווט חדש!**
+יצרתי עבורכם כרטיס מעקב נסיעה חכם בזמן אמת.
+
+👤 **נהג משויך:** ${driverId === "hikmat" ? "חכמת (מרצדס מנוף)" : "עלי (איסוזו משטח)"}
+📍 **יעד נסיעה:** ${addr}
+⏱️ **זמן הגעה משוער (ETA):** 18 דקות
+
+🔗 **קישור נהג לניווט ב-Waze:**
+https://waze.com/ul?ll=${lat},${lng}&navigate=yes
+
+📱 **קישור מעקב לקוח בזמן אמת:**
+${trackingLink}
+
+💬 **הודעת WhatsApp מוכנה לשליחה ללקוח:**
+\`הנהג שלנו בדרך אליך! למעקב בזמן אמת: ${trackingLink}\`
+
+*(תוכלו ללחוץ על אייקון הווטסאפ לצד המיקום לשיתוף מהיר מהדאשבורד).*`;
+
+    return res.json({ reply: replyHebrew });
   }
 
   const ai = getGeminiClient();

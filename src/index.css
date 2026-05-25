@@ -1,1 +1,8 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+/* Leaflet container premium styling */
+.leaflet-container {
+  font-family: inherit;
+  background-color: #f1f5f9;
+}
