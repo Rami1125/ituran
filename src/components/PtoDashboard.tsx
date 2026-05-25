@@ -23,7 +23,8 @@ import {
   LineChart as LineIcon, 
   Sparkles, 
   Wrench, 
-  AlertCircle 
+  AlertCircle,
+  FileText
 } from "lucide-react";
 import { VehicleState } from "../types";
 
@@ -119,6 +120,180 @@ export default function PtoDashboard({ fleet }: PtoDashboardProps) {
   // Dynamic status warnings for heavy duty
   const isHikmatWorking = fleet["hikmat"]?.ptoState === "open";
   const isAliWorking = fleet["ali"]?.ptoState === "open";
+
+  // Master PDF/Print Daily Report compiler function
+  const downloadDailyReportPdf = () => {
+    const printFrame = document.createElement("iframe");
+    printFrame.style.position = "fixed";
+    printFrame.style.right = "0";
+    printFrame.style.bottom = "0";
+    printFrame.style.width = "0";
+    printFrame.style.height = "0";
+    printFrame.style.border = "none";
+    document.body.appendChild(printFrame);
+
+    const doc = printFrame.contentWindow?.document || printFrame.contentDocument;
+    if (!doc) return;
+
+    const currentDateStr = new Date().toLocaleDateString("he-IL", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const currentTimeStr = new Date().toLocaleTimeString("he-IL", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    // Build the vehicles list rows
+    const vehiclesRows = Object.entries(fleet).map(([id, v]) => {
+      const driverName = id === "hikmat" ? "חכמת" : id === "ali" ? "עלי" : v.driver;
+      const truckDesc = id === "hikmat" ? "מרצדס מנוף" : id === "ali" ? "איסוזו משטח" : v.vehicle;
+      return `
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 12px 16px; font-size: 14px; font-weight: bold; color: #0f172a;">${v.name || driverName}</td>
+          <td style="padding: 12px 16px; font-size: 14px; color: #334155;">${v.driver || driverName}</td>
+          <td style="padding: 12px 16px; font-size: 14px; color: #334155; font-family: monospace;">${v.vehicle || truckDesc}</td>
+          <td style="padding: 12px 16px; font-size: 14px; color: #475569;">${v.address || "לא זמינה"}</td>
+          <td style="padding: 12px 16px; font-size: 14px; color: #334155; font-family: monospace;">${v.speed || 0} קמ"ש</td>
+          <td style="padding: 12px 16px; font-size: 14px;">
+            <span style="display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: bold; ${v.ptoState === 'open' ? 'background-color: #fee2e2; color: #991b1b;' : 'background-color: #f1f5f9; color: #334155;'}">
+              ${v.ptoState === "open" ? "פתוח (עבודה פעילה)" : "סגור (חנייה/נסיעה)"}
+            </span>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="he" dir="rtl">
+      <head>
+        <meta charset="UTF-8">
+        <title>SabanOS - דוח פעילות יומי</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+          body { 
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; 
+            background-color: white;
+            color: #1e293b;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          @media print {
+            body { background-color: white; }
+            .no-print { display: none; }
+            @page { size: A4; margin: 15mm; }
+          }
+        </style>
+      </head>
+      <body class="p-8">
+        <!-- Report Header -->
+        <div class="border-b-4 border-slate-900 pb-6 mb-8 flex justify-between items-start">
+          <div>
+            <div class="flex items-center gap-3">
+              <div style="background-color: #000000; color: #FFBF00; padding: 10px; border-radius: 12px; font-weight: bold; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 2px solid #FFBF00; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+                🚚
+              </div>
+              <div>
+                <h1 class="text-3xl font-black text-slate-900 tracking-tight leading-tight">SabanOS | סבאן מערכות</h1>
+                <p class="text-xs text-slate-500 font-bold mt-0.5">מערך פיקוח, ניהול, וסינכרון PTO שבועי (איתורן)</p>
+              </div>
+            </div>
+          </div>
+          <div class="text-left font-sans">
+            <span class="bg-slate-900 text-amber-400 font-black px-3 py-1 rounded text-xs tracking-wider inline-block">דוח יומי מאומת</span>
+            <p class="text-xs text-slate-500 mt-2 font-mono">תאריך: ${currentDateStr}</p>
+            <p class="text-xs text-slate-500 font-mono font-bold">הופק בשעה: ${currentTimeStr}</p>
+          </div>
+        </div>
+
+        <!-- Overview Cards -->
+        <div class="bg-slate-50 border border-slate-200 rounded-3xl p-6 mb-8">
+          <h2 class="text-sm font-black text-slate-900 mb-4 border-b border-slate-200 pb-2 flex items-center gap-2">
+            <span>📋 מדדים מרכזיים ופעילות רשת הצי</span>
+          </h2>
+          <div class="grid grid-cols-3 gap-6">
+            <div class="border-l border-slate-200 pl-4">
+              <span class="text-xs text-slate-400 block font-bold mb-1">סה"כ שעות עבודת PTO:</span>
+              <span class="text-2xl font-black text-slate-900 font-mono">${stats.totalHours} שעות</span>
+              <p class="text-[10px] text-slate-400 mt-1">מצטבר עבור כלל רכבי הצי</p>
+            </div>
+            <div class="border-l border-slate-200 pl-4">
+              <span class="text-xs text-slate-400 block font-bold mb-1">יום השיא השבועי:</span>
+              <span class="text-2xl font-black text-amber-700 font-sans">${stats.peakDay}</span>
+              <p class="text-[10px] text-slate-500 mt-1">מוביל שעות עבודה: <strong>${stats.peakDriver}</strong></p>
+            </div>
+            <div>
+              <span class="text-xs text-slate-400 block font-bold mb-1">ממוצע יומי למשאית:</span>
+              <span class="text-2xl font-black text-slate-900 font-mono">${stats.avgDailyMins} דקות</span>
+              <p class="text-[10px] text-slate-400 mt-1">ימי עבודה פעילים: א'-ו'</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fleet Grid Table -->
+        <div class="mb-8">
+          <h2 class="text-sm font-black text-slate-900 mb-4 border-b border-slate-200 pb-2">🚛 מצב הכלים הנוכחי (זמן אמת)</h2>
+          <table class="w-full text-right border-collapse" style="width: 100%;">
+            <thead>
+              <tr class="bg-slate-100 border-b-2 border-slate-300">
+                <th style="padding: 10px 16px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">קוד כלי</th>
+                <th style="padding: 10px 16px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">נהג רשום</th>
+                <th style="padding: 10px 16px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">סוג ואפיון כלי</th>
+                <th style="padding: 10px 16px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">מיקום אחרון (איתורן)</th>
+                <th style="padding: 10px 16px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">מהירות</th>
+                <th style="padding: 10px 16px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">מצב PTO</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${vehiclesRows}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Insights Summary Block -->
+        <div class="bg-amber-50/50 border border-amber-200/50 rounded-2xl p-6 mb-8">
+          <h3 class="font-bold text-amber-950 mb-2.5 text-xs flex items-center gap-1.5">
+            <span>⚠️ הנחיות בטיחות מחייבות ללילה ושמירה על הכלים:</span>
+          </h3>
+          <ul class="list-disc list-inside space-y-1.5 text-xs text-amber-900/90 leading-relaxed pr-2">
+            <li>חלה חובה מוחלטת לוודא שזרועות המנוף במרצדס סגורות לחלוטין ומערכות ה-PTO כבויות לפני חניית לילה.</li>
+            <li>בכל הפעלת PTO מנוף, על הנהג להפעיל בלמים ידניים מלאים ולוודא פריסת רגליים מייצבות מעוגנות היטב.</li>
+            <li>כל חריגה או הפעלה פתאומית תיעד ותשוגר כהתרעה קריטית בזמן אמת למערכת נועה איתורן.</li>
+          </ul>
+        </div>
+
+        <!-- Stamp Signature Area -->
+        <div class="mt-16 pt-8 border-t border-slate-200 grid grid-cols-2 gap-12 text-xs">
+          <div>
+            <p class="text-slate-400 font-semibold">הפקת מערך SabanOS:</p>
+            <p class="font-extrabold text-slate-800 mt-2">פיקוח בקרה דיגיטלי איתורן</p>
+            <span class="inline-block mt-1 px-2.5 py-1 bg-green-50 text-green-700 border border-green-200 rounded font-bold text-[9px]">חתימה דיגיטלית מאושרת</span>
+          </div>
+          <div class="text-left">
+            <p class="text-slate-400 font-semibold">חתימת מנהל סידור עבודה / קצין בטיחות:</p>
+            <div class="h-10 border-b border-dashed border-slate-300 w-48 inline-block mt-3"></div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    doc.open();
+    doc.write(htmlContent);
+    doc.close();
+
+    setTimeout(() => {
+      printFrame.contentWindow?.focus();
+      printFrame.contentWindow?.print();
+      setTimeout(() => {
+        document.body.removeChild(printFrame);
+      }, 1000);
+    }, 800);
+  };
 
   return (
     <div id="pto-pattern-dashboard" className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-6 w-full text-slate-800">
@@ -457,6 +632,29 @@ export default function PtoDashboard({ fleet }: PtoDashboardProps) {
             </li>
           </ul>
         </div>
+      </div>
+
+      {/* Daily Summary & PDF Generation Section */}
+      <div className="bg-slate-900 rounded-3xl p-5 border border-slate-800 text-white flex flex-col md:flex-row md:items-center md:justify-between gap-5 shadow-lg">
+        <div className="space-y-1.5 search-pwa-pdf-summary">
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 bg-blue-500/10 text-blue-400 rounded-lg">
+              <FileText className="w-4 h-4" />
+            </span>
+            <h3 className="font-extrabold text-sm text-slate-100">סיכום יומי מרוכז של הצי | SabanOS Daily Digest</h3>
+          </div>
+          <p className="text-slate-400 text-xs leading-relaxed max-w-2xl">
+            דוח מקיף המשלב את מדדי ה-PTO הנוכחיים של חכמת ועלי, מקורות המיקום המעודכנים מאיתורן והתרעות הבטיחות של הצי. ניתן להוריד ולהדפיס כקובץ PDF רשמי עבור הנהגים ומנהל הצי.
+          </p>
+        </div>
+        
+        <button
+          onClick={downloadDailyReportPdf}
+          className="bg-blue-600 hover:bg-blue-500 font-extrabold text-xs text-white px-5 py-3 rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-2 shrink-0 shadow-lg shadow-blue-500/20 border-t border-white/10 active:scale-95"
+        >
+          <FileText className="w-4 h-4 text-white" />
+          <span>הורד דוח יומי כ-PDF</span>
+        </button>
       </div>
     </div>
   );
