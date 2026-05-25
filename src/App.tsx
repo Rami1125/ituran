@@ -27,6 +27,7 @@ import { motion, AnimatePresence } from "motion/react";
 import LiveMap from "./components/LiveMap";
 import NoaChat from "./components/NoaChat";
 import PtoDashboard from "./components/PtoDashboard";
+import GestureCard from "./components/GestureCard";
 import { VehicleState, AlertLog, ActiveRide, ChatMessage } from "./types";
 
 // Local sound synthesizer and browser-native Audio play to trigger physical alert features
@@ -112,6 +113,71 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [mapTheme, setMapTheme] = useState<"light" | "dark">("light");
+
+  const [blackBoxLogs, setBlackBoxLogs] = useState<any[]>(() => {
+    try {
+      const stored = localStorage.getItem("BlackBox_Logs");
+      if (stored) return JSON.parse(stored);
+    } catch (e) {}
+    return [
+      {
+        id: "crane_evt_1",
+        type: "CRANE_EVENT",
+        driverId: "ali",
+        driverName: "עלי",
+        action: "סגירה",
+        timestamp: Date.now() - 3600000 * 2,
+        durationMs: 2400000,
+        pointsEarned: 4,
+        hasActiveRideAssigned: true
+      },
+      {
+        id: "crane_evt_2",
+        type: "CRANE_EVENT",
+        driverId: "hikmat",
+        driverName: "חכמת",
+        action: "סגירה",
+        timestamp: Date.now() - 3600000 * 4,
+        durationMs: 3600000,
+        pointsEarned: 6,
+        hasActiveRideAssigned: true
+      }
+    ];
+  });
+
+  const [aliPoints, setAliPoints] = useState<number>(() => {
+    return parseFloat(localStorage.getItem("points_ali") || "12.5");
+  });
+  const [hikmatPoints, setHikmatPoints] = useState<number>(() => {
+    return parseFloat(localStorage.getItem("points_hikmat") || "15.0");
+  });
+
+  const [activeSyncAlert, setActiveSyncAlert] = useState<string | null>(null);
+  const lastKnownPto = useRef<Record<string, "open" | "closed" | "unknown">>({});
+
+  const toggleDriverPtoSimulation = async (driverId: string) => {
+    const currentPto = fleet[driverId]?.ptoState || "closed";
+    const nextPto = currentPto === "open" ? "closed" : "open";
+    const driverParam = driverId === "hikmat" ? "חכמת" : "עלי";
+    
+    try {
+      await fetch("/api/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          driver: driverParam,
+          ptoState: nextPto,
+          latitude: fleet[driverId]?.latitude || 32.0853,
+          longitude: fleet[driverId]?.longitude || 34.7818,
+          address: fleet[driverId]?.address || "מיקום פיקוח סלולר",
+          speed: nextPto === "open" ? 0 : 35
+        })
+      });
+      fetchFleetData();
+    } catch (e) {
+      console.error(e);
+    }
+  };
   
   // Selection and creation overlays
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | undefined>(undefined);
@@ -202,6 +268,124 @@ export default function App() {
   };
 
   const prevFleetRef = useRef<Record<string, VehicleState>>({});
+
+  // Real-Time Crane Sync (Hard-Sync Logic)
+  useEffect(() => {
+    if (!fleet || Object.keys(fleet).length === 0) return;
+
+    Object.keys(fleet).forEach((driverId) => {
+      const currentVehicle = fleet[driverId];
+      const previousState = lastKnownPto.current[driverId];
+      const currentState = currentVehicle.ptoState;
+
+      if (previousState && previousState !== currentState) {
+        const driverName = driverId === "hikmat" ? "חכמת" : "עלי";
+
+        if (currentState === "open") {
+          // PTO Open Event
+          const hasActiveRideObj = rides.some(
+            (r) => r.driverId === driverId && r.status === "active"
+          );
+
+          localStorage.setItem(`crane_start_time_${driverId}`, String(Date.now()));
+
+          const newLog = {
+            id: `crane_evt_${Date.now()}`,
+            type: "CRANE_EVENT",
+            driverId,
+            driverName,
+            action: "פתיחה",
+            timestamp: Date.now(),
+            hasActiveRideAssigned: hasActiveRideObj,
+          };
+
+          setBlackBoxLogs((prev) => {
+            const updated = [newLog, ...prev];
+            localStorage.setItem("BlackBox_Logs", JSON.stringify(updated));
+            return updated;
+          });
+
+          if (!hasActiveRideObj) {
+            setActiveSyncAlert(
+              `התרעת בטיחות: מנוף של ${driverName} נפתח ללא נסיעה פעילה משויכת במערכת!`
+            );
+            playSonarTone("alarm");
+
+            const syncAlertLog: AlertLog = {
+              id: `sync_alert_${Date.now()}`,
+              timestamp: new Date().toISOString(),
+              vehicle: currentVehicle.vehicle,
+              driver: driverName,
+              address: currentVehicle.address || "מיקום הדגמה",
+              ptoState: "open",
+              type: "critical",
+              message: `[אבטחה חריגה] התרעת סנכרון: מנוף ${driverName} נפתח ללא הזמנה מוגדרת באזור הפעילות!`,
+            };
+            setAlerts((prev) => [syncAlertLog, ...prev]);
+          } else {
+            const syncAlertLog: AlertLog = {
+              id: `sync_ok_${Date.now()}`,
+              timestamp: new Date().toISOString(),
+              vehicle: currentVehicle.vehicle,
+              driver: driverName,
+              address: currentVehicle.address || "מיקום פעילות",
+              ptoState: "open",
+              type: "location_update",
+              message: `[סנכרון מאושר] מנוף ${driverName} נפתח בעיצומו של סידור עבודה תקין ומאושר.`,
+            };
+            setAlerts((prev) => [syncAlertLog, ...prev]);
+          }
+        } else if (currentState === "closed") {
+          // PTO Close Event
+          const startTimeStr = localStorage.getItem(`crane_start_time_${driverId}`);
+          const startTime = startTimeStr ? parseInt(startTimeStr) : Date.now() - 35 * 60 * 1000;
+          const durationMs = Date.now() - startTime;
+          const durationMinutes = Math.max(1, Math.round(durationMs / 60000));
+          const pointsEarned = parseFloat((durationMinutes / 10).toFixed(1)) || 0.5;
+
+          if (driverId === "ali") {
+            setAliPoints((prev) => {
+              const nextVal = parseFloat((prev + pointsEarned).toFixed(1));
+              localStorage.setItem("points_ali", String(nextVal));
+              return nextVal;
+            });
+          } else {
+            setHikmatPoints((prev) => {
+              const nextVal = parseFloat((prev + pointsEarned).toFixed(1));
+              localStorage.setItem("points_hikmat", String(nextVal));
+              return nextVal;
+            });
+          }
+
+          const hasActiveRideObj = rides.some(
+            (r) => r.driverId === driverId && r.status === "active"
+          );
+
+          const newLog = {
+            id: `crane_evt_${Date.now()}`,
+            type: "CRANE_EVENT",
+            driverId,
+            driverName,
+            action: "סגירה",
+            timestamp: Date.now(),
+            durationMs,
+            pointsEarned,
+            hasActiveRideAssigned: hasActiveRideObj,
+          };
+
+          setBlackBoxLogs((prev) => {
+            const updated = [newLog, ...prev];
+            localStorage.setItem("BlackBox_Logs", JSON.stringify(updated));
+            return updated;
+          });
+
+          setActiveSyncAlert(null);
+        }
+      }
+
+      lastKnownPto.current[driverId] = currentState;
+    });
+  }, [fleet, rides]);
 
   // Parse path to see if this is raw customer tracking screen
   const pathname = window.location.pathname;
@@ -603,16 +787,28 @@ export default function App() {
       
       {/* Alert Banner for system state (PTO critical warnings) */}
       <AnimatePresence>
-        {vehiclesList.some(v => v.ptoState === "open") && (
+        {activeSyncAlert && (
           <motion.div 
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="bg-red-600 text-white font-medium py-3 px-6 text-center flex items-center justify-center gap-3 text-sm tracking-wide shadow-md shrink-0 relative z-50 animate-pulse"
+            className="bg-yellow-600 text-white font-black py-3.5 px-6 text-center flex items-center justify-center gap-3 text-sm tracking-wide shadow-md shrink-0 relative z-50 animate-pulse border-b border-yellow-500"
+          >
+            <AlertTriangle className="w-5 h-5 animate-bounce text-white" />
+            <span>{activeSyncAlert}</span>
+            <span className="bg-yellow-900 text-yellow-101 px-2 py-0.5 rounded text-xs select-none">חריגת סנכרון</span>
+          </motion.div>
+        )}
+        {vehiclesList.some(v => v.ptoState === "open") && !activeSyncAlert && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="bg-red-650 text-white font-medium py-3 px-6 text-center flex items-center justify-center gap-3 text-sm tracking-wide shadow-md shrink-0 relative z-50 animate-pulse"
           >
             <ShieldAlert className="w-5 h-5 animate-bounce" />
             <span>התרעת PTO פעילה: משאית של <strong>{vehiclesList.find(v => v.ptoState === "open")?.driver}</strong> פתוחה ועובדת כעת בשטח!</span>
-            <span className="hidden md:inline bg-red-850 px-2 py-0.5 rounded text-xs">קריטי</span>
+            <span className="hidden md:inline bg-red-850 px-2 py-0.5 rounded text-xs select-none">קריטי</span>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1013,30 +1209,41 @@ export default function App() {
               {vehiclesList.map(v => {
                 const isPto = v.ptoState === "open";
                 return (
-                  <div 
-                    key={v.id} 
+                  <GestureCard
+                    key={v.id}
+                    onSwipeRight={() => {
+                      setSelectedVehicleId(v.id);
+                      if (soundEnabled) playSonarTone("location");
+                    }}
+                    onSwipeLeft={() => {
+                      toggleDriverPtoSimulation(v.id);
+                    }}
                     onClick={() => setSelectedVehicleId(v.id)}
-                    className={`bg-slate-50 hover:bg-slate-100 border border-slate-200/80 rounded-2xl p-3 flex items-center justify-between cursor-pointer transition-all ${
-                      selectedVehicleId === v.id ? "ring-2 ring-blue-500" : ""
-                    }`}
+                    className="w-full flex"
                   >
-                    <div className="flex items-center gap-2">
-                      <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center ${
-                        v.id === "hikmat" ? "bg-blue-600" : "bg-emerald-600"
-                      }`}>
-                        <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
+                    <div 
+                      className={`w-full bg-slate-50 hover:bg-slate-100 border border-slate-200/80 rounded-2xl p-3 flex items-center justify-between cursor-pointer transition-all ${
+                        selectedVehicleId === v.id ? "ring-2 ring-blue-500" : ""
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center ${
+                          v.id === "hikmat" ? "bg-blue-600" : "bg-emerald-600"
+                        }`}>
+                          <div className="w-1.5 h-1.5 rounded-full bg-white"></div>
+                        </div>
+                        <span className="font-bold text-slate-700">{v.driver}:</span>
                       </div>
-                      <span className="font-bold text-slate-700">{v.driver}:</span>
+                      <span className="bg-slate-200/60 px-2 py-0.5 rounded text-slate-600 text-[10px] font-mono select-all">
+                        {v.latitude?.toFixed(4)}, {v.longitude?.toFixed(4)}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                        isPto ? "bg-red-100 text-red-700 animate-pulse" : "bg-slate-200/55 text-slate-600"
+                      }`}>
+                        {isPto ? "מנוף פתוח 🛠️" : "בנסיעה 🚚"}
+                      </span>
                     </div>
-                    <span className="bg-slate-200/60 px-2 py-0.5 rounded text-slate-600 text-[10px] font-mono select-all">
-                      {v.latitude?.toFixed(4)}, {v.longitude?.toFixed(4)}
-                    </span>
-                    <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
-                      isPto ? "bg-red-100 text-red-700 animate-pulse" : "bg-slate-200/55 text-slate-600"
-                    }`}>
-                      {isPto ? "מנוף פתוח 🛠️" : "בנסיעה 🚚"}
-                    </span>
-                  </div>
+                  </GestureCard>
                 );
               })}
             </div>
@@ -1067,45 +1274,59 @@ export default function App() {
                   const waLink = `https://wa.me/${r.customerPhone ? r.customerPhone.replace(/[^0-9]/g, "") : ""}?text=${encodeURIComponent(waMessage)}`;
 
                   return (
-                    <div key={r.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs leading-relaxed flex flex-col justify-between space-y-2 relative overflow-hidden">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-extrabold text-slate-900">{r.customerName} ({r.customerPhone || "ללא טלפון"})</p>
-                          <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[200px]">📍 {r.destinationName}</p>
-                          <span className="text-[9px] text-slate-400 block mt-1 font-mono">נהג: {r.driverId === "hikmat" ? "חכמת" : "עלי"} | ETA: {r.etaMinutes} דקות</span>
+                    <GestureCard
+                      key={r.id}
+                      onSwipeRight={() => {
+                        navigator.clipboard.writeText(trackingUrl);
+                        triggerCopyNotification(r.id);
+                        if (soundEnabled) playSonarTone("location");
+                      }}
+                      onSwipeLeft={() => {
+                        setSelectedVehicleId(r.driverId);
+                        if (soundEnabled) playSonarTone("location");
+                      }}
+                      className="w-full flex"
+                    >
+                      <div className="w-full bg-slate-50 border border-slate-200 rounded-3xl p-3 text-xs leading-relaxed flex flex-col justify-between space-y-2 relative overflow-hidden">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-extrabold text-slate-900">{r.customerName} ({r.customerPhone || "ללא טלפון"})</p>
+                            <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[155px]">📍 {r.destinationName}</p>
+                            <span className="text-[9px] text-slate-400 block mt-1 font-mono">נהג: {r.driverId === "hikmat" ? "חכמת" : "עלי"} | ETA: {r.etaMinutes} דקות</span>
+                          </div>
+                          <button 
+                            onClick={() => {
+                              navigator.clipboard.writeText(trackingUrl);
+                              triggerCopyNotification(r.id);
+                            }}
+                            className="bg-white border border-slate-200/85 hover:bg-slate-100 p-1.5 rounded-lg text-slate-500 tracking-tight text-[10px] flex items-center gap-1 transition-all cursor-pointer font-bold shrink-0"
+                          >
+                            {copyFeedback === r.id ? "הועתק! ✓" : <><Copy className="w-3 h-3" /> העתק</>}
+                          </button>
                         </div>
-                        <button 
-                          onClick={() => {
-                            navigator.clipboard.writeText(trackingUrl);
-                            triggerCopyNotification(r.id);
-                          }}
-                          className="bg-white border border-slate-200/85 hover:bg-slate-100 p-1.5 rounded-lg text-slate-500 tracking-tight text-[10px] flex items-center gap-1 transition-all cursor-pointer font-bold shrink-0"
-                        >
-                          {copyFeedback === r.id ? "הועתק! ✓" : <><Copy className="w-3 h-3" /> העתק קישור</>}
-                        </button>
-                      </div>
 
-                      <div className="flex gap-2 text-[10px] pt-1 border-t border-slate-150">
-                        <a 
-                          href={waLink} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="flex-grow bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded-lg text-center flex items-center justify-center gap-1 cursor-pointer transition-colors"
-                        >
-                          <Share2 className="w-3.5 h-3.5" />
-                          <span>שתף ל-WhatsApp</span>
-                        </a>
-                        <a 
-                          href={`/track/${r.id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="bg-slate-200/70 hover:bg-slate-200 text-slate-700 font-bold px-3.5 py-1.5 rounded-lg flex items-center justify-center shrink-0"
-                          title="תצוגת לקוח חי"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
+                        <div className="flex gap-2 text-[10px] pt-1 border-t border-slate-150">
+                          <a 
+                            href={waLink} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="flex-grow bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded-lg text-center flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <Share2 className="w-3.5 h-3.5" />
+                            <span>שתף ל-WhatsApp</span>
+                          </a>
+                          <a 
+                            href={`/track/${r.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="bg-slate-200/70 hover:bg-slate-200 text-slate-700 font-bold px-3.5 py-1.5 rounded-lg flex items-center justify-center shrink-0"
+                            title="תצוגת לקוח חי"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
                       </div>
-                    </div>
+                    </GestureCard>
                   );
                 })
               )}
@@ -1209,7 +1430,12 @@ export default function App() {
 
         {/* PTO Patterns Weekly Analysis Dashboard */}
         <div className="col-span-12 mt-4">
-          <PtoDashboard fleet={fleet} />
+          <PtoDashboard 
+            fleet={fleet} 
+            blackBoxLogs={blackBoxLogs}
+            aliPoints={aliPoints}
+            hikmatPoints={hikmatPoints}
+          />
         </div>
 
       </div>

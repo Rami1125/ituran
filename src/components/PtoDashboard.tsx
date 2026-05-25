@@ -49,9 +49,17 @@ const INITIAL_PTO_DATA: WeeklyPtoData[] = [
 
 interface PtoDashboardProps {
   fleet: Record<string, VehicleState>;
+  blackBoxLogs?: any[];
+  aliPoints?: number;
+  hikmatPoints?: number;
 }
 
-export default function PtoDashboard({ fleet }: PtoDashboardProps) {
+export default function PtoDashboard({
+  fleet,
+  blackBoxLogs = [],
+  aliPoints = 12.5,
+  hikmatPoints = 15.0
+}: PtoDashboardProps) {
   const [chartType, setChartType] = useState<"bar" | "area" | "line">("bar");
   const [metricType, setMetricType] = useState<"minutes" | "count">("minutes");
 
@@ -393,6 +401,12 @@ export default function PtoDashboard({ fleet }: PtoDashboardProps) {
               מצטבר השבוע ({stats.hikmatCount} הפעלות נפרדות)
             </span>
           </div>
+
+          <div className="mt-3 text-[10px] flex items-center justify-between text-blue-900 bg-blue-100/55 rounded-lg p-2 font-bold font-sans">
+            <span>🎯 נקודות ביצוע חכמת:</span>
+            <span className="font-mono text-xs">{hikmatPoints}</span>
+          </div>
+
           {isHikmatWorking && (
             <div className="mt-2.5 bg-red-100 text-red-700 px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 animate-pulse">
               <span className="w-2.5 h-2.5 bg-red-600 rounded-full"></span>
@@ -417,6 +431,12 @@ export default function PtoDashboard({ fleet }: PtoDashboardProps) {
               מצטבר השבוע ({stats.aliCount} גרירות והעמסות)
             </span>
           </div>
+
+          <div className="mt-3 text-[10px] flex items-center justify-between text-emerald-900 bg-emerald-100/55 rounded-lg p-2 font-bold font-sans">
+            <span>🎯 נקודות ביצוע עלי (Ali-Points):</span>
+            <span className="font-mono text-xs">{aliPoints}</span>
+          </div>
+
           {isAliWorking && (
             <div className="mt-2.5 bg-red-100 text-red-700 px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 animate-pulse">
               <span className="w-2.5 h-2.5 bg-red-600 rounded-full"></span>
@@ -631,6 +651,101 @@ export default function PtoDashboard({ fleet }: PtoDashboardProps) {
               מצב ה-PTO משויך ללוויין באופן שוטף. כל לחיצה נוספת משוקפת בסינכרון ישיר מערוץ המייל של החנות.
             </li>
           </ul>
+        </div>
+      </div>
+
+      {/* BlackBox Real-Time Sync Logs Panel */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-inner space-y-4 text-slate-200">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 absolute"></span>
+            <h3 className="font-black text-xs text-slate-100 tracking-tight flex items-center gap-2 mr-2">
+              📊 BlackBox Logger: מערכת סינכרון קשיח וניקוד צי
+            </h3>
+          </div>
+          <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full font-black tracking-wider">
+            מצב: סנכרון לווין איתורן פעיל
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">🏆 ריכוז נקודות ביצוע פעילות הצי שלנו</h4>
+            <div className="space-y-2">
+              <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex justify-between items-center text-xs text-slate-300">
+                <div className="flex items-center gap-2 font-bold">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                  <span>עלי (Ali-Points):</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="font-mono text-emerald-400 font-extrabold text-sm">{aliPoints}</span>
+                  <span className="text-[10px] text-slate-500 font-bold">נקודות</span>
+                </div>
+              </div>
+              <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex justify-between items-center text-xs text-slate-300">
+                <div className="flex items-center gap-2 font-bold">
+                  <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                  <span>חכמת (Hikmat-Points):</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="font-mono text-blue-400 font-extrabold text-sm">{hikmatPoints}</span>
+                  <span className="text-[10px] text-slate-500 font-bold">נקודות</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">⏱️ מנגנון ההמרה אוטומטי</h4>
+            <p className="text-[10px] text-slate-300 leading-relaxed bg-slate-950/85 p-3 rounded-2xl border border-slate-800">
+              כל **10 דקות** של עבודת PTO מאומתת מקנות **1 נקודת ביצוע** לחישוב יעילות וסדרי עבודה. הזנקה חורגת של ה-PTO ללא כתובת הזמנה משויכת לקצה תתועד מיד כאירוע איתורן חריג ותשגר צפצוף בקרה בבסיס SabanOS.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-2 pt-1">
+          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">📌 ציר אירועים ותיעודים (BlackBox_Logs)</h4>
+          <div className="max-h-[160px] overflow-y-auto space-y-2 pr-1 h-[140px] border border-slate-800/85 rounded-2xl p-2 bg-slate-950/50">
+            {blackBoxLogs.length === 0 ? (
+              <p className="text-[10px] text-slate-500 text-center py-8">אין אירועי מנוף רשומים במחזור הנוכחי.</p>
+            ) : (
+              blackBoxLogs.map((log: any) => {
+                const isWarning = !log.hasActiveRideAssigned;
+                const dateStr = new Date(log.timestamp).toLocaleTimeString("he-IL", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit"
+                });
+                return (
+                  <div key={log.id} className={`p-2.5 rounded-xl border text-[11px] flex justify-between items-center transition-all ${
+                    isWarning 
+                      ? "bg-red-950/50 border-red-900/60 text-red-200" 
+                      : "bg-slate-950 border-slate-850 text-slate-300"
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${isWarning ? "bg-red-500 animate-pulse" : "bg-emerald-500"}`}></span>
+                      <span className="font-bold">{log.driverName}:</span>
+                      <span>הפעלת מנוף - פעולת {log.action || "שינוי"}</span>
+                      {log.durationMs && (
+                        <span className="text-slate-400 font-sans">
+                          (משך: {Math.round(log.durationMs / 60000)} דקות | תוספת: {log.pointsEarned} נק')
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {isWarning && (
+                        <span className="bg-red-500/20 text-red-400 text-[9px] font-bold px-1.5 py-0.5 rounded border border-red-500/20 animate-pulse">
+                          ⚠️ הפעלה ללא הזמנה
+                        </span>
+                      )}
+                      <span className="font-mono text-slate-500 text-[10px]">{dateStr}</span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
 
