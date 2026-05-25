@@ -17,9 +17,11 @@ import {
   Gauge, 
   Activity, 
   Zap, 
-  Layers 
+  Layers,
+  AlertCircle
 } from "lucide-react";
 import { VehicleState, ActiveRide } from "../types";
+import firebaseConfig from "../../firebase-applet-config.json";
 
 // Premium Dark Theme style array for Google Maps (based on Snazzy Maps / Night theme)
 const NIGHT_STYLES: google.maps.MapTypeStyle[] = [
@@ -125,15 +127,29 @@ const LIGHT_MINIMAL_STYLES: google.maps.MapTypeStyle[] = [
   }
 ];
 
-// Robust central resolution of API key as specified in instruction skill
-const API_KEY =
-  process.env.GOOGLE_MAPS_PLATFORM_KEY ||
-  (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
-  (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY ||
-  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
-  "";
+// Helper to filter out stub keys, default values, or placeholders
+const isStubOrPlaceholder = (key: string | undefined): boolean => {
+  if (!key) return true;
+  const k = key.trim().toLowerCase();
+  return (
+    k === "" ||
+    k === "your_api_key" ||
+    k === "placeholder" ||
+    k.includes("fakekey") ||
+    k.includes("replace")
+  );
+};
 
-const hasValidKey = Boolean(API_KEY) && API_KEY !== "YOUR_API_KEY";
+// Robust central resolution of API key as specified in instruction skill
+const API_KEY = [
+  process.env.GOOGLE_MAPS_PLATFORM_KEY,
+  (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY,
+  (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY,
+  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY,
+  firebaseConfig?.apiKey
+].find(key => !isStubOrPlaceholder(key)) || "";
+
+const hasValidKey = Boolean(API_KEY);
 
 /**
  * Custom hook to smoothly interpolate coordinates between updates.
@@ -420,6 +436,28 @@ export default function LiveMap({
   theme = "light"
 }: LiveMapProps) {
   const [autoBoundsActive, setAutoBoundsActive] = useState(true);
+  const [authFailed, setAuthFailed] = useState(false);
+
+  useEffect(() => {
+    // Listen for Google Maps authentication failures (e.g., InvalidKeyMapError)
+    const originalAuthFailure = (window as any).gm_authFailure;
+    
+    (window as any).gm_authFailure = () => {
+      console.warn("Google Maps credentials validation failed live. Informing user in Hebrew UI.");
+      setAuthFailed(true);
+      if (typeof originalAuthFailure === "function") {
+        originalAuthFailure();
+      }
+    };
+
+    return () => {
+      if (originalAuthFailure) {
+        (window as any).gm_authFailure = originalAuthFailure;
+      } else {
+        delete (window as any).gm_authFailure;
+      }
+    };
+  }, []);
 
   // Mandatory splash screen triggered when API key is unprovided
   if (!hasValidKey) {
@@ -458,6 +496,40 @@ export default function LiveMap({
             </div>
           </div>
           <p className="text-[10px] text-slate-500">הבנייה תסתיים אוטומטית ללא צורך בריענון דפדפן יזום.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Dynamic override UI if the backend validation fails with InvalidKeyMapError
+  if (authFailed) {
+    return (
+      <div id="maps-auth-failure" className="w-full h-full min-h-[300px] bg-slate-900 flex items-center justify-center rounded-2xl md:rounded-3xl border border-red-500/30 shadow-md p-6 relative">
+        <div className="text-center max-w-sm space-y-4">
+          <div className="w-14 h-14 bg-red-500/10 text-red-500 rounded-2xl flex items-center justify-center mx-auto ring-8 ring-red-500/5">
+            <AlertCircle className="w-7 h-7 text-red-500 animate-pulse" />
+          </div>
+          <h3 className="text-lg font-black text-white">מפתח ה-API נדחה (Invalid Key)</h3>
+          <p className="text-slate-400 text-xs leading-relaxed max-w-sm mx-auto">
+            מפתח ה-API של Google Maps שהוגדר נדחה על ידי שרתי גוגל (שגיאת <code>InvalidKeyMapError</code>).
+          </p>
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 text-right text-xs text-slate-300 space-y-3" dir="rtl">
+            <div>
+              <strong className="block text-amber-500 font-bold mb-1">כיצד לתקן שגיאה זו:</strong>
+              <ol className="list-decimal list-inside space-y-2 text-slate-400">
+                <li>
+                  ודא שהדבקת את מפתח ה-API הנכון מה-Console של גוגל קלאוד.
+                </li>
+                <li>
+                  ב-Cloud Console, ודא שהאפשרות <strong>Maps JavaScript API</strong> מופעלת (Enabled) עבור מפתח זה.
+                </li>
+                <li>
+                  אם הגדרת "הגבלות מפתח" (Key Restrictions), ודא שהדומיין הנוכחי מורשה, או הסר זמנית את ההגבלה לבדיקה.
+                </li>
+              </ol>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500 font-sans">אנא עדכן את ה-Secret <code>GOOGLE_MAPS_PLATFORM_KEY</code> בהגדרות.</p>
         </div>
       </div>
     );
