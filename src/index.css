@@ -1,6 +1,12 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
+/* Lock browser double-pull pull to refresh to ensure map panning is seamless and native */
+html, body {
+  overscroll-behavior-y: contain;
+  overflow-x: hidden;
+}
+
 /* Leaflet container premium styling */
 .leaflet-container {
   font-family: inherit;

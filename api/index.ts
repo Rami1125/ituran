@@ -11,6 +11,23 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Dynamic asset resolution mapping PNG icons directly to the crisp SVG vector logo
+app.get("/icon-192.png", (req, res) => {
+  res.setHeader("Content-Type", "image/svg+xml");
+  const p1 = path.join(process.cwd(), "public", "icon.svg");
+  const p2 = path.join(process.cwd(), "dist", "icon.svg");
+  const iconPath = fs.existsSync(p1) ? p1 : p2;
+  res.sendFile(iconPath);
+});
+
+app.get("/icon-512.png", (req, res) => {
+  res.setHeader("Content-Type", "image/svg+xml");
+  const p1 = path.join(process.cwd(), "public", "icon.svg");
+  const p2 = path.join(process.cwd(), "dist", "icon.svg");
+  const iconPath = fs.existsSync(p1) ? p1 : p2;
+  res.sendFile(iconPath);
+});
+
 // Local database path with safe Vercel /tmp fallback
 const isVercel = !!process.env.VERCEL;
 const DB_FILE = isVercel

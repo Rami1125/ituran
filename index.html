@@ -1,9 +1,34 @@
 <!doctype html>
-<html lang="en">
+<html lang="he" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <!-- Dynamic mobile notch-aware view lock avoiding double-tap zoom scales -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>SabanOS - נועה איתורן</title>
+    
+    <!-- Web App Manifest file linkage support -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#000000" />
+    
+    <!-- iOS Add to Home Screen standalone visual capability status -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SabanOS" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("/service-worker.js")
+            .then((reg) => {
+              console.log("SabanOS Service Worker successfully loaded:", reg.scope);
+            })
+            .catch((err) => {
+              console.error("SabanOS Service Worker failed to register:", err);
+            });
+        });
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

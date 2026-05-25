@@ -29,8 +29,44 @@ import NoaChat from "./components/NoaChat";
 import PtoDashboard from "./components/PtoDashboard";
 import { VehicleState, AlertLog, ActiveRide, ChatMessage } from "./types";
 
-// Local sound synthesizer to play pristine audio alerts
+// Local sound synthesizer and browser-native Audio play to trigger physical alert features
 const playSonarTone = (type: "location" | "alarm") => {
+  // Mobile Phone vibration pulse pattern for critical PTO alerts
+  if (type === "alarm" && "vibrate" in navigator) {
+    try {
+      // Pulse sequence: vibrate 300ms, pause 100ms, vibrate 300ms, pause 100ms, vibrate 400ms
+      navigator.vibrate([300, 100, 300, 100, 400]);
+      console.log("[PWA Hardware] Triggered critical PTO alarm physical device vibration");
+    } catch (ve) {
+      console.warn("Vibration API rejected or ignored by platform constraints:", ve);
+    }
+  }
+
+  // Attempt to play '/alert.mp3' for alarm, falling back to real synthesizer to bypass autoplay issues
+  if (type === "alarm") {
+    try {
+      const audio = new Audio("/alert.mp3");
+      audio.volume = 0.9;
+      audio.play()
+        .then(() => {
+          console.log("[PWA Audio] Playback for alert.mp3 resolved successfully.");
+        })
+        .catch((audioErr) => {
+          console.warn("Browser autoplay blocked /alert.mp3 initially. Falling back to synthesized Web Audio:", audioErr);
+          synthesizeSonarTone(type);
+        });
+    } catch (e) {
+      console.warn("HTML5 Audio failed. Falling back to synthesized Web Audio context play:", e);
+      synthesizeSonarTone(type);
+    }
+  } else {
+    // Location update plays normal crisp sonar tone
+    synthesizeSonarTone(type);
+  }
+};
+
+// Web Audio backup sound synthesizer
+const synthesizeSonarTone = (type: "location" | "alarm") => {
   try {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
@@ -113,6 +149,57 @@ export default function App() {
   const [simText, setSimText] = useState("");
   const [simulationExpanded, setSimulationExpanded] = useState(false);
   const [systemInfoExpanded, setSystemInfoExpanded] = useState(false);
+
+  // PWA Add to Home Screen / Install prompt behavior state
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
+
+  useEffect(() => {
+    // Detect iOS to show customized 'Add to Home Screen' safari helper guide
+    const iosDetect = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    setIsIOS(iosDetect);
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      // Prevent automatic installation prompt popups by default
+      e.preventDefault();
+      // Store the installation event
+      setDeferredPrompt(e);
+      // Reveal the beautiful sliding banner to the user
+      setShowInstallBanner(true);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt as any);
+
+    // Show banner on iOS if loaded within standard browser to assist installation setup
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches || (navigator as any).standalone;
+    if (iosDetect && !isStandalone) {
+      setShowInstallBanner(true);
+    }
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt as any);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) {
+      if (isIOS) {
+        alert("על מנת להתקין את SabanOS באייפון:\n1. לחצו על לחצן השיתוף (Share) בתחתית דפדפן ה-Safari.\n2. גללו מטה ובחרו ב-'הוסף למסך הבית' (Add to Home Screen)!\n3. אשרו את ההוספה כדי לקבל גישה מלאה.");
+      } else {
+        alert("תפריט התקנה מקוון זמין ישירות דרך כפתור שלוש הנקודות בדפדפן הנייד שלכם במכשירי Android!");
+      }
+      return;
+    }
+    // Show installation popup dialog
+    deferredPrompt.prompt();
+    // Await user's confirmation
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`PWA installation challenge response outcome: ${outcome}`);
+    // Reset stored event
+    setDeferredPrompt(null);
+    setShowInstallBanner(false);
+  };
 
   const prevFleetRef = useRef<Record<string, VehicleState>>({});
 
@@ -1126,6 +1213,51 @@ export default function App() {
         </div>
 
       </div>
+
+      {/* Dynamic PWA Mobile Add to Home Screen Glass Banner */}
+      <AnimatePresence>
+        {showInstallBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.95 }}
+            className="fixed bottom-6 left-6 right-6 md:left-auto md:max-w-md bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-3xl p-5 shadow-2xl z-50 text-white flex flex-col gap-4"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-bold shadow-lg">
+                  <Truck className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-white">התקן את אפליקציית SabanOS</h4>
+                  <p className="text-[10px] text-slate-400 mt-0.5">קבלו התרעות פוש בזמן אמת, צלילים וויברציות ישירות למכשיר!</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowInstallBanner(false)}
+                className="text-slate-400 hover:text-white text-sm font-semibold p-1 cursor-pointer"
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={handleInstallClick}
+                className="flex-grow bg-blue-600 hover:bg-blue-500 text-white font-black py-2.5 rounded-xl transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer shadow-md border-t border-white/10"
+              >
+                <span>התקן כעת</span>
+              </button>
+              <button
+                onClick={() => setShowInstallBanner(false)}
+                className="bg-slate-800 hover:bg-slate-755 text-slate-300 font-semibold px-4 py-2.5 rounded-xl transition-all cursor-pointer border border-slate-705"
+              >
+                מאוחר יותר
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

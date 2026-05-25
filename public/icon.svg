@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="230" fill="#000000" stroke="#FFBF00" stroke-width="12" />
+  
+  <!-- Outer glowing ring -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#FFBF00" stroke-width="2" stroke-opacity="0.3" stroke-dasharray="10 15" />
+
+  <!-- Elegant Location Pin in Golden Yellow -->
+  <path d="M256,60 C156.6,60 76,140.6 76,240 C76,339.4 256,452 256,452 C256,452 436,339.4 436,240 C436,140.6 355.4,60 256,60 Z" 
+        fill="url(#goldGradient)" />
+
+  <!-- Inner pin core -->
+  <circle cx="256" cy="216" r="85" fill="#000000" />
+
+  <!-- Minimalist Gold Fleet Truck inside the Pin -->
+  <g transform="translate(196, 171) scale(1.1)" fill="#FFD700">
+    <!-- Cabin -->
+    <path d="M10,40 L60,40 L60,10 L40,10 L30,22 L10,22 Z" />
+    <!-- Container / Back flatbed -->
+    <rect x="65" y="5" width="40" height="35" rx="2" />
+    <!-- Rear flatbed overlay -->
+    <path d="M105,25 L115,25 L115,40 L105,40 Z" />
+    <!-- Tires -->
+    <circle cx="30" cy="46" r="9" />
+    <circle cx="85" cy="46" r="9" />
+    <circle cx="100" cy="46" r="9" />
+  </g>
+
+  <!-- Gradients definitions -->
+  <defs>
+    <linearGradient id="goldGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFF0A5" />
+      <stop offset="50%" stop-color="#FFBF00" />
+      <stop offset="100%" stop-color="#996515" />
+    </linearGradient>
+  </defs>
+</svg>
