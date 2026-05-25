@@ -1,0 +1,10 @@
+{
+  "apiKey": "AIzaSyFakeKey-ReplaceWithYourActualFirebaseWebApiKey",
+  "authDomain": "saban-ai-drive.firebaseapp.com",
+  "projectId": "saban-ai-drive",
+  "storageBucket": "saban-ai-drive.appspot.com",
+  "messagingSenderId": "000000000000",
+  "appId": "1:000000000000:web:0000000000000000",
+  "firestoreDatabaseId": "(default)",
+  "region": "europe-west2"
+}
