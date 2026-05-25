@@ -320,6 +320,8 @@ export default function App() {
               ptoState: "open",
               type: "critical",
               message: `[אבטחה חריגה] התרעת סנכרון: מנוף ${driverName} נפתח ללא הזמנה מוגדרת באזור הפעילות!`,
+              latitude: currentVehicle.latitude,
+              longitude: currentVehicle.longitude,
             };
             setAlerts((prev) => [syncAlertLog, ...prev]);
           } else {
@@ -332,6 +334,8 @@ export default function App() {
               ptoState: "open",
               type: "location_update",
               message: `[סנכרון מאושר] מנוף ${driverName} נפתח בעיצומו של סידור עבודה תקין ומאושר.`,
+              latitude: currentVehicle.latitude,
+              longitude: currentVehicle.longitude,
             };
             setAlerts((prev) => [syncAlertLog, ...prev]);
           }
@@ -706,6 +710,7 @@ export default function App() {
               selectedVehicleId={assignedDriverVal.id} 
               activeRide={customerRide}
               theme="dark"
+              alerts={alerts}
             />
           )}
 
@@ -1192,6 +1197,7 @@ export default function App() {
                 selectedVehicleId={selectedVehicleId}
                 onVehicleSelect={(v) => setSelectedVehicleId(v.id)}
                 theme={mapTheme}
+                alerts={alerts}
               />
 
               {loading && (

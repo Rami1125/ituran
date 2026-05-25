@@ -58,6 +58,8 @@ interface AlertLog {
   ptoState: string;
   type: "location_update" | "pto_alert" | "critical";
   message: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 interface ActiveRide {
@@ -507,7 +509,9 @@ app.post("/api/webhook", async (req, res) => {
     address: address || updatedVehicle.address,
     ptoState: normalizedPto,
     type: isPtoChange ? "critical" : typeStr,
-    message: displayMessage
+    message: displayMessage,
+    latitude: lat,
+    longitude: lng
   };
 
   dbState.alerts.unshift(newAlert);

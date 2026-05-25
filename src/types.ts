@@ -22,6 +22,8 @@ export interface AlertLog {
   ptoState: string;
   type: "location_update" | "pto_alert" | "critical";
   message: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface ChatMessage {
