@@ -3,18 +3,14 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, collection, addDoc } from "firebase/firestore";
+import { getFirestore, doc, setDoc, collection, addDoc, getDocs } from "firebase/firestore";
 
 const app = express();
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// נתיב זמני לוורסל - שימוש בתיקיית /tmp שזמינה ב-Serverless
-const isVercel = !!process.env.VERCEL || !!process.env.NEXT_PUBLIC_VERCEL_ENV;
-const DB_FILE = isVercel 
-  ? path.join("/tmp", "fleet_db.json") 
-  : path.join(process.cwd(), "fleet_db.json");
+// גיבוי מקומי בלבד לפיתוח. בוורסל נסתמך רק על הזיכרון ועל Firestore
+const DB_FILE = path.join(process.cwd(), "fleet_db.json");
 
 interface VehicleState {
   id: string;
@@ -56,7 +52,7 @@ interface ActiveRide {
   wazeLink?: string;
 }
 
-// נתונים התחלתיים
+// נתוני ברירת מחדל
 const initialFleet: Record<string, VehicleState> = {
   hikmat: {
     id: "hikmat",
@@ -92,38 +88,48 @@ let dbState: { fleet: Record<string, VehicleState>; alerts: AlertLog[]; activeRi
   activeRides: {}
 };
 
-// טעינה מהקובץ המקומי (אם קיים)
-try {
-  if (fs.existsSync(DB_FILE)) {
-    const data = fs.readFileSync(DB_FILE, "utf-8");
-    dbState = JSON.parse(data);
-  } else {
-    fs.writeFileSync(DB_FILE, JSON.stringify(dbState, null, 2));
-  }
-} catch (error) {
-  console.error("Failed DB read", error);
-}
-
-const saveLocalDb = () => {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(dbState, null, 2));
-  } catch (error) {
-    console.error("Failed to save state to local DB", error);
-  }
-};
-
-// Firebase (אופציונלי לסביבת הענן)
+// אתחול Firebase חכם (קורא ממשתני סביבה בוורסל)
 let firestoreDb: any = null;
 try {
-  const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(firebaseConfigPath)) {
-    const firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf-8"));
+  // עדיפות 1: משתני סביבה מ-Vercel
+  if (process.env.FIREBASE_PROJECT_ID) {
+    const firebaseConfig = {
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      // משתנים חשובים במיוחד בענן
+    };
     const firebaseApp = initializeApp(firebaseConfig);
-    firestoreDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+    firestoreDb = getFirestore(firebaseApp);
+    console.log("Firebase initialized via ENV vars.");
+  } 
+  // עדיפות 2: קובץ לוקאלי (רק לסביבת פיתוח מקומית)
+  else if (fs.existsSync(path.join(process.cwd(), "firebase-applet-config.json"))) {
+    const firebaseConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), "firebase-applet-config.json"), "utf-8"));
+    const firebaseApp = initializeApp(firebaseConfig);
+    firestoreDb = getFirestore(firebaseApp);
+    console.log("Firebase initialized via local JSON.");
   }
 } catch (error) {
-  console.log("No Firebase config found. Running locally.");
+  console.log("Running without Firebase. Changes will not persist across Vercel cold starts.");
 }
+
+// פונקציה קריטית: שחזור המצב מהענן אחרי Cold Start
+let isStateRestored = false;
+const restoreStateFromCloud = async () => {
+  if (!firestoreDb || isStateRestored) return;
+  try {
+    const fleetSnap = await getDocs(collection(firestoreDb, "fleet"));
+    fleetSnap.forEach(doc => { dbState.fleet[doc.id] = doc.data() as VehicleState; });
+    
+    const ridesSnap = await getDocs(collection(firestoreDb, "activeRides"));
+    ridesSnap.forEach(doc => { dbState.activeRides[doc.id] = doc.data() as ActiveRide; });
+
+    isStateRestored = true;
+    console.log("System state successfully restored from Firestore.");
+  } catch (error) {
+    console.error("Failed to restore state from Firestore:", error);
+  }
+};
 
 const syncToFirestore = async (collectionName: string, docId: string, data: any) => {
   if (!firestoreDb) return;
@@ -137,31 +143,58 @@ const syncToFirestore = async (collectionName: string, docId: string, data: any)
 
 // --- NATIVE EXPRESS ROUTES ---
 
-app.get("/api/fleet", (req, res) => {
+app.get("/api/fleet", async (req, res) => {
+  await restoreStateFromCloud(); // מוודא שהנתונים מעודכנים מהענן לפני השליחה ללקוח
   res.json(dbState);
 });
 
-app.post("/api/fleet/clear-pulse", (req, res) => {
+app.post("/api/fleet/clear-pulse", async (req, res) => {
   const { id } = req.body;
   if (dbState.fleet[id]) {
     dbState.fleet[id].pulseActive = false;
-    saveLocalDb();
   }
   res.json({ status: "ok" });
 });
 
-app.get("/api/rides", (req, res) => {
+app.get("/api/rides", async (req, res) => {
+  await restoreStateFromCloud();
   res.json({ success: true, rides: Object.values(dbState.activeRides || {}) });
 });
 
-app.get("/api/rides/:id", (req, res) => {
+app.get("/api/rides/:id", async (req, res) => {
+  await restoreStateFromCloud();
   const ride = dbState.activeRides ? dbState.activeRides[req.params.id] : null;
   if (!ride) return res.status(404).json({ error: "מעקב נסיעה לא נמצא" });
   const driver = dbState.fleet[ride.driverId];
   res.json({ success: true, ride, driver });
 });
 
+app.post("/api/rides", async (req, res) => {
+  await restoreStateFromCloud();
+  const { driverId, customerName, customerPhone, destinationName, destinationLatitude, destinationLongitude, etaMinutes } = req.body;
+  const id = `ride_${Date.now()}`;
+  
+  const newRide: ActiveRide = {
+    id,
+    driverId: driverId || "ali",
+    customerName: customerName || "לקוח קצה",
+    customerPhone: customerPhone || "",
+    destinationName: destinationName || "מיקום כללי",
+    destinationLatitude: parseFloat(destinationLatitude) || 32.0853,
+    destinationLongitude: parseFloat(destinationLongitude) || 34.7818,
+    etaMinutes: parseInt(etaMinutes) || 15,
+    status: "active",
+    createdAt: new Date().toISOString(),
+    wazeLink: `https://waze.com/ul?ll=${destinationLatitude},${destinationLongitude}&navigate=yes`
+  };
+
+  dbState.activeRides[id] = newRide;
+  await syncToFirestore("activeRides", id, newRide);
+  res.json({ success: true, ride: newRide });
+});
+
 app.post("/api/webhook", async (req, res) => {
+  await restoreStateFromCloud();
   const { time, vehicle, driver, latitude, longitude, address, ptoState, alertType, text } = req.body;
   
   let matchedDriverId = "hikmat";
@@ -199,13 +232,13 @@ app.post("/api/webhook", async (req, res) => {
   dbState.alerts.unshift(newAlert);
   if (dbState.alerts.length > 50) dbState.alerts.pop();
 
-  saveLocalDb();
   await syncToFirestore("fleet", matchedDriverId, updatedVehicle);
-
   res.status(200).json({ status: "success", data: updatedVehicle });
 });
 
 app.post("/api/chat", async (req, res) => {
+  await restoreStateFromCloud();
+  // שאר לוגיקת הצ'אט שלך נשארת זהה...
   const { message } = req.body;
   if (!message) return res.status(400).json({ error: "Message required" });
   
@@ -221,5 +254,4 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// יצוא האפליקציה לוורסל (במקום app.listen הבעייתי בסביבת ענן)
 export default app;
