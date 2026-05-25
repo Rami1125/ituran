@@ -26,6 +26,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import LiveMap from "./components/LiveMap";
 import NoaChat from "./components/NoaChat";
+import PtoDashboard from "./components/PtoDashboard";
 import { VehicleState, AlertLog, ActiveRide, ChatMessage } from "./types";
 
 // Local sound synthesizer to play pristine audio alerts
@@ -1064,6 +1065,11 @@ export default function App() {
 
           </div>
 
+        </div>
+
+        {/* PTO Patterns Weekly Analysis Dashboard */}
+        <div className="col-span-12 mt-4">
+          <PtoDashboard fleet={fleet} />
         </div>
 
       </div>

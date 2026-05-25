@@ -19,7 +19,7 @@ import firebaseConfig from "../firebase-applet-config.json";
 const app = initializeApp(firebaseConfig);
 
 // Initialize Services
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || "(default)");
+export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId || "(default)");
 export const auth = getAuth(app);
 
 // Connectivity check as outlined in instructions
