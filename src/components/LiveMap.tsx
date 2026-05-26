@@ -20,7 +20,8 @@ import {
   Layers,
   AlertCircle,
   Lock,
-  Unlock
+  Unlock,
+  Car
 } from "lucide-react";
 import { VehicleState, ActiveRide, AlertLog } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -447,6 +448,51 @@ function CustomPolyline({ path, options }: CustomPolylineProps) {
   return null;
 }
 
+// Helper subcomponent to render real-time Google Maps TrafficLayer dynamically
+interface TrafficLayerComponentProps {
+  enabled: boolean;
+  onFocusTrigger?: () => void;
+}
+
+function TrafficLayerComponent({ enabled, onFocusTrigger }: TrafficLayerComponentProps) {
+  const map = useMap();
+  const prevEnabledRef = useRef(enabled);
+
+  useEffect(() => {
+    if (!map) return;
+    if (typeof google === "undefined" || !google.maps) return;
+
+    const trafficLayer = new google.maps.TrafficLayer();
+
+    if (enabled) {
+      trafficLayer.setMap(map);
+      
+      // If of Gush Dan and transition from off -> on, pan map dynamically to Center Gush Dan for traffic tracking
+      if (!prevEnabledRef.current) {
+        try {
+          map.panTo({ lat: 32.0853, lng: 34.7818 });
+          map.setZoom(11);
+          if (onFocusTrigger) {
+            onFocusTrigger();
+          }
+        } catch (e) {
+          console.warn("Could not center map on Gush Dan for traffic load:", e);
+        }
+      }
+    } else {
+      trafficLayer.setMap(null);
+    }
+
+    prevEnabledRef.current = enabled;
+
+    return () => {
+      trafficLayer.setMap(null);
+    };
+  }, [map, enabled, onFocusTrigger]);
+
+  return null;
+}
+
 // Main upgraded view component
 interface LiveMapProps {
   vehicles: VehicleState[];
@@ -468,6 +514,7 @@ export default function LiveMap({
   const [autoBoundsActive, setAutoBoundsActive] = useState(true);
   const [authFailed, setAuthFailed] = useState(false);
   const [isMapInteracting, setIsMapInteracting] = useState(false);
+  const [trafficEnabled, setTrafficEnabled] = useState(false);
 
   // Find alerts matching the selected vehicle's driver.
   const driverAlerts = useMemo(() => {
@@ -737,6 +784,12 @@ export default function LiveMap({
             </AdvancedMarker>
           )}
 
+          {/* Real-time Traffic Layer for Gush Dan / Central Israel */}
+          <TrafficLayerComponent 
+            enabled={trafficEnabled} 
+            onFocusTrigger={() => setAutoBoundsActive(false)}
+          />
+
           {/* Bound Controller to auto-wrap both vehicles and targets perfectly */}
           <MapBoundsController
             vehicles={vehicles}
@@ -752,13 +805,34 @@ export default function LiveMap({
           onClick={() => setAutoBoundsActive(!autoBoundsActive)}
           className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold font-sans shadow-lg border cursor-pointer transition-all ${
             autoBoundsActive 
-              ? "bg-blue-600 text-white border-blue-500 scale-100" 
+              ? "bg-blue-600 text-white border-blue-500 scale-100 ring-4 ring-blue-500/30" 
               : "bg-white text-slate-700 bg-white/90 backdrop-blur-sm border-slate-200 hover:bg-white"
           }`}
-          title={autoBoundsActive ? "כיבוי מיקוד אוטומטי" : "הפעלת מיקוד אוטומטי לצי"}
+          title={autoBoundsActive ? "כיבוי מרכוז אוטומטי (Auto-Center)" : "הפעלת מרכוז אוטומטי (Auto-Center) לשמירה על כל הרכבים בתצוגה"}
         >
           <Maximize className="w-3.5 h-3.5" />
-          <span>{autoBoundsActive ? "מיקוד אקטיבי" : "מיקוד כבוי"}</span>
+          <span>{autoBoundsActive ? "מרכוז אוטומטי: פעיל 🛰️" : "מרכוז אוטומטי כבוי 🗺️"}</span>
+        </button>
+
+        <button
+          onClick={() => setTrafficEnabled(!trafficEnabled)}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold font-sans shadow-lg border cursor-pointer transition-all relative ${
+            trafficEnabled 
+              ? "bg-emerald-600 text-white border-emerald-500 scale-100 animate-pulse ring-4 ring-emerald-500/30" 
+              : "bg-white text-slate-700 bg-white/90 backdrop-blur-sm border-slate-200 hover:bg-white"
+          }`}
+          title={trafficEnabled ? "הסתר עומסי תנועה בזמן אמת" : "הצג עומסי תנועה בגוש דן"}
+        >
+          <div className="relative">
+            <Car className="w-3.5 h-3.5" />
+            {trafficEnabled && (
+              <span className="absolute -top-1 -right-1 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
+              </span>
+            )}
+          </div>
+          <span>{trafficEnabled ? "עומסי תנועה: פעיל 🚦" : "עומסי תנועה גוש דן 🗺️"}</span>
         </button>
 
         {isMapInteracting && (
