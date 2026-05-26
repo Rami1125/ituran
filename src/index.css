@@ -46,3 +46,39 @@ html, body {
   font-family: inherit;
   background-color: #f1f5f9;
 }
+
+/* Hover tooltip pseudo-element for active traffic toggle button */
+#map-bounds-controller-ui button:has(svg.lucide-car)[data-label="Traffic Active"]:hover::after {
+  content: attr(data-label);
+  position: absolute;
+  top: 100%;
+  right: 50%;
+  transform: translateX(50%);
+  margin-top: 8px;
+  background-color: #0f172a; /* Slate 900 */
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: sans-serif;
+  padding: 4px 8px;
+  border-radius: 6px;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100;
+  animation: toolTipFadeIn 0.12s ease-out forwards;
+  animation-delay: 200ms;
+}
+
+@keyframes toolTipFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(50%, -4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(50%, 0);
+  }
+}
+

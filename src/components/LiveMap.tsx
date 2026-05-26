@@ -816,6 +816,7 @@ export default function LiveMap({
 
         <button
           onClick={() => setTrafficEnabled(!trafficEnabled)}
+          data-label={trafficEnabled ? "Traffic Active" : undefined}
           className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold font-sans shadow-lg border cursor-pointer transition-all relative ${
             trafficEnabled 
               ? "bg-emerald-600 text-white border-emerald-500 scale-100 animate-pulse ring-4 ring-emerald-500/30" 
