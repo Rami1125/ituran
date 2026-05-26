@@ -684,7 +684,7 @@ export default function App() {
     const assignedDriverVal = fleet[customerRide.driverId] || customerDriver;
 
     return (
-      <div dir="rtl" className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col relative overflow-hidden">
+      <div dir="rtl" className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col relative overflow-y-auto scrollable-content-area">
         {/* Simple top glowing strip resembling top track quality */}
         <div className="bg-slate-900 border-b border-slate-850 px-6 py-4 flex items-center justify-between z-10 shrink-0">
           <div className="flex items-center gap-3">
@@ -788,7 +788,7 @@ export default function App() {
   const vehiclesList = Object.values(fleet) as VehicleState[];
 
   return (
-    <div dir="rtl" className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-200">
+    <div dir="rtl" className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-200 overflow-y-auto scrollable-content-area">
       
       {/* Alert Banner for system state (PTO critical warnings) */}
       <AnimatePresence>

@@ -1,10 +1,44 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
-/* Lock browser double-pull pull to refresh to ensure map panning is seamless and native */
+/* Reset background and prevent hidden scroll issues */
 html, body {
-  overscroll-behavior-y: contain;
-  overflow-x: hidden;
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: auto !important; /* Overrides rigid 100vh constraints causing locks */
+  min-height: 100vh !important;
+  overflow-y: auto !important; /* Unlock vertical scroll physically */
+  overflow-x: hidden !important;
+  overscroll-behavior-y: auto !important; /* Re-enable natural pull down physics */
+  -webkit-overflow-scrolling: touch !important; /* Enable iOS Momentum scroll */
+  scroll-behavior: smooth;
+  background-color: #f8fafc; /* Slate off-white backdrop */
+}
+
+/* React application root wrapper */
+#root {
+  width: 100% !important;
+  min-height: 100vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: visible !important;
+}
+
+/* Scroll physics utility */
+.scrollable-content-area {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  scroll-behavior: smooth;
+}
+
+/* Disable pointer events on the map when it's not active to prevent scrolling hijacking */
+.map-touch-shielded {
+  pointer-events: none !important;
+}
+
+.map-touch-active {
+  pointer-events: auto !important;
 }
 
 /* Leaflet container premium styling */

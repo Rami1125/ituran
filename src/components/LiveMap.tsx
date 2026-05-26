@@ -18,7 +18,9 @@ import {
   Activity, 
   Zap, 
   Layers,
-  AlertCircle
+  AlertCircle,
+  Lock,
+  Unlock
 } from "lucide-react";
 import { VehicleState, ActiveRide, AlertLog } from "../types";
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -465,6 +467,7 @@ export default function LiveMap({
 }: LiveMapProps) {
   const [autoBoundsActive, setAutoBoundsActive] = useState(true);
   const [authFailed, setAuthFailed] = useState(false);
+  const [isMapInteracting, setIsMapInteracting] = useState(false);
 
   // Find alerts matching the selected vehicle's driver.
   const driverAlerts = useMemo(() => {
@@ -641,6 +644,22 @@ export default function LiveMap({
 
   return (
     <div id="google-live-tracking-system" className="w-full h-full relative" style={{ minHeight: "280px" }}>
+      {/* Dynamic Interaction shield lock resolving viewport momentum scrolling conflict */}
+      {!isMapInteracting && (
+        <div 
+          onClick={() => setIsMapInteracting(true)}
+          className="absolute inset-0 z-30 bg-slate-950/20 hover:bg-slate-950/30 cursor-pointer flex items-center justify-center transition-all group rounded-2xl md:rounded-3xl"
+        >
+          <div className="max-w-[280px] md:max-w-xs bg-slate-900 border border-slate-800 text-white rounded-2xl px-4 py-3 shadow-2xl flex items-center gap-3 transform group-hover:scale-105 transition-all select-none">
+            <Unlock className="w-5 h-5 text-amber-500 shrink-0" />
+            <div className="text-right">
+              <span className="block text-xs font-black">לחץ להתרת ניווט במפה 🗺️</span>
+              <span className="block text-[10px] text-slate-400">מונע מהמפה לחסום גלילה במכשירים ניידים</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <APIProvider 
         apiKey={API_KEY} 
         language="iw" 
@@ -655,7 +674,9 @@ export default function LiveMap({
           mapId="DEMO_MAP_ID" // Enabled AdvancedMarker capability (CF6 requirement)
           styles={theme === "dark" ? NIGHT_STYLES : LIGHT_MINIMAL_STYLES}
           internalUsageAttributionIds={["gmp_mcp_codeassist_v1_aistudio"]}
-          className="w-full h-full rounded-2xl md:rounded-3xl border border-slate-200/60 shadow-md overflow-hidden"
+          className={`w-full h-full rounded-2xl md:rounded-3xl border border-slate-200/60 shadow-md overflow-hidden ${
+            isMapInteracting ? "map-touch-active pointer-events-auto" : "map-touch-shielded pointer-events-none"
+          }`}
         >
           {/* Render GPS-synced Vehicles with glides */}
           {vehicles.map((v) => {
@@ -726,7 +747,7 @@ export default function LiveMap({
       </APIProvider>
 
       {/* Floating control buttons */}
-      <div id="map-bounds-controller-ui" className="absolute top-4 right-4 z-10 flex flex-col gap-2">
+      <div id="map-bounds-controller-ui" className="absolute top-4 right-4 z-40 flex flex-col gap-2">
         <button
           onClick={() => setAutoBoundsActive(!autoBoundsActive)}
           className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold font-sans shadow-lg border cursor-pointer transition-all ${
@@ -739,6 +760,17 @@ export default function LiveMap({
           <Maximize className="w-3.5 h-3.5" />
           <span>{autoBoundsActive ? "מיקוד אקטיבי" : "מיקוד כבוי"}</span>
         </button>
+
+        {isMapInteracting && (
+          <button
+            onClick={() => setIsMapInteracting(false)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-900/95 hover:bg-slate-900 border border-slate-800 text-white rounded-xl text-xs font-bold font-sans shadow-lg cursor-pointer transition-all"
+            title="נעל מפה ומנע הפרעת גלילה"
+          >
+            <Lock className="w-3.5 h-3.5 text-amber-500" />
+            <span>נעל מפה לגלילה 🔒</span>
+          </button>
+        )}
       </div>
     </div>
   );
